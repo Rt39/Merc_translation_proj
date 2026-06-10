@@ -1,12 +1,44 @@
-# Python-generated files
+# Python
 __pycache__/
 *.py[oc]
 build/
 dist/
 wheels/
 *.egg-info
+.venv/
 
-# Virtual environments
-.venv
-
+# Tools
 Il2CppDumper/
+il2cpp_output/
+
+# Binary data (large, regeneratable)
+*.bin
+*.bundle
+*.bundle.bak
+*.bundle.original
+
+# Extracted data (large, regeneratable)
+merc_storia_dialogue.json
+merc_metadata.json
+jp_monobehaviours.txt
+
+# Test/intermediate bundles
+test_repacked*.bundle
+
+# Scratch/superseded scripts
+decrypt_test*.py
+analyze_*.py
+disasm_*.py
+find_*.py
+scan_*.py
+test_*.py
+parse_*.py
+show_example.py
+trace_parse.py
+fix_speakers.py
+fix_speakers2.py
+patch_crc.py
+patch_crc2.py
+decrypt_final.py
+extract_example.py
+find_example.py
