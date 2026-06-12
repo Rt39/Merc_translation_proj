@@ -21,7 +21,9 @@ il2cpp_output/
 merc_storia_dialogue.json
 merc_metadata.json
 jp_monobehaviours.txt
-stories/
+extracted_data/
+repacked_bundles/
+masterdata_scan.json
 
 # Test/intermediate bundles
 test_repacked*.bundle

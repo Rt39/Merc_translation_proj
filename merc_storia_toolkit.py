@@ -1,24 +1,62 @@
 """Merc Storia Translation Toolkit
 
-Complete pipeline for extracting, translating, and repacking story text.
+End-to-end pipeline for extracting, translating, and repacking every piece of
+translatable Japanese text in the game (story dialogue + master data).
 
-Usage:
-    python merc_storia_toolkit.py extract          - Extract all dialogue to JSON
-    python merc_storia_toolkit.py extract-meta      - Extract chapter/story metadata
-    python merc_storia_toolkit.py repack <json>     - Repack translated JSON into bundles
-    python merc_storia_toolkit.py test-repack       - Test repack on example story
+Usage
+-----
+    uv run merc_storia_toolkit.py extract
+        Extract everything: stories AND misc MasterData. Equivalent to running
+        `extract-story` then `extract-misc`.
+
+    uv run merc_storia_toolkit.py extract-story
+        Stories only → extracted_data/story/<story_id>.json (one file per story),
+        with title / episode / chapter_name / display_order at the head of each
+        file so the translator has context immediately.
+
+    uv run merc_storia_toolkit.py extract-misc
+        MasterData bundles with JP text → extracted_data/misc/<AssetName>.json.
+
+    uv run merc_storia_toolkit.py repack
+        Repack everything (stories + misc) that has been modified.
+
+    uv run merc_storia_toolkit.py repack-story
+        Repack only modified story JSONs → repacked_bundles/story/<bundle>.
+
+    uv run merc_storia_toolkit.py repack-misc
+        Repack only modified misc JSONs → repacked_bundles/misc/<bundle>.
+
+    uv run merc_storia_toolkit.py test-repack
+        Round-trip a single bundle to confirm the pipeline.
+
+Translation workflow
+--------------------
+Translators edit the JSON files **in place** — replace the original Japanese
+strings with translations in `scenes[*].speakers` / `scenes[*].text` (stories)
+or `strings[*].value` (misc). The repacker walks each bundle, finds every
+string slot at its original offset, and substitutes the value from the JSON.
+Anything the translator left unchanged is preserved byte-for-byte. No separate
+"translations" dict needed.
+
+Modification tracking
+---------------------
+At extract time, the SHA-256 of every output JSON is recorded in
+`extracted_data/.fingerprints.pkl`. At repack time, files whose current hash
+matches the recorded baseline are treated as untouched and skipped — only the
+files the translator actually edited get repacked. Pass `--force` to repack
+unconditionally.
 
 Encryption: AES-256-CBC-PKCS7
-    Key: PBKDF2-HMAC-SHA256(password="2147483647", salt="-2147483648", iterations=1024, dklen=32)
-    IV: First 16 bytes of ciphertext (prepended)
+    Key: PBKDF2-HMAC-SHA256(password="2147483647", salt="-2147483648",
+                            iterations=1024, dklen=32)
+    IV:  First 16 bytes of ciphertext (prepended)
 
 Data format: MemoryPack (UTF-8 mode)
     Strings: int32 ~utf8_byte_count, int32 char_count, byte[utf8_byte_count]
-    Null: int32(-1), Empty: int32(0)
-
-Bundle format: UnityFS containing TextAsset with encrypted MemoryPack data
+    Null:    int32(-1)
+    Empty:   int32(0)
 """
-import sys, io, struct, os, json, time, argparse
+import sys, io, struct, os, json, time, argparse, pickle, hashlib
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -29,14 +67,13 @@ import UnityPy
 # === Crypto ===
 
 _kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32,
-                   salt=b"-2147483648", iterations=1024)
+                  salt=b"-2147483648", iterations=1024)
 AES_KEY = _kdf.derive(b"2147483647")
 
 
 def decrypt(data: bytes) -> bytes:
     iv, ct = data[:16], data[16:]
-    cipher = Cipher(algorithms.AES(AES_KEY), modes.CBC(iv))
-    dec = cipher.decryptor()
+    dec = Cipher(algorithms.AES(AES_KEY), modes.CBC(iv)).decryptor()
     pt = dec.update(ct) + dec.finalize()
     pad = pt[-1]
     if 1 <= pad <= 16 and all(b == pad for b in pt[-pad:]):
@@ -44,14 +81,12 @@ def decrypt(data: bytes) -> bytes:
     return pt
 
 
-def encrypt(plaintext: bytes) -> bytes:
+def encrypt(pt: bytes) -> bytes:
     iv = os.urandom(16)
     padder = sym_padding.PKCS7(128).padder()
-    padded = padder.update(plaintext) + padder.finalize()
-    cipher = Cipher(algorithms.AES(AES_KEY), modes.CBC(iv))
-    enc = cipher.encryptor()
-    ct = enc.update(padded) + enc.finalize()
-    return iv + ct
+    body = padder.update(pt) + padder.finalize()
+    enc = Cipher(algorithms.AES(AES_KEY), modes.CBC(iv)).encryptor()
+    return iv + enc.update(body) + enc.finalize()
 
 
 # === MemoryPack ===
@@ -67,13 +102,11 @@ def read_string(data: bytes, pos: int):
         return "", pos
     bc = ~raw
     if bc > 0 and bc < 100000 and pos + 4 + bc <= len(data):
-        cc = struct.unpack_from('<i', data, pos)[0]
+        struct.unpack_from('<i', data, pos)[0]  # char_count (UTF-16 units), ignored
         pos += 4
         try:
-            s = data[pos:pos + bc].decode('utf-8')
-            pos += bc
-            return s, pos
-        except:
+            return data[pos:pos + bc].decode('utf-8'), pos + bc
+        except UnicodeDecodeError:
             return None, pos
     return None, pos
 
@@ -83,8 +116,8 @@ def write_string(s) -> bytes:
         return struct.pack('<i', -1)
     if s == "":
         return struct.pack('<i', 0)
-    encoded = s.encode('utf-8')
-    return struct.pack('<i', ~len(encoded)) + struct.pack('<i', len(s)) + encoded
+    enc = s.encode('utf-8')
+    return struct.pack('<i', ~len(enc)) + struct.pack('<i', len(s)) + enc
 
 
 # === Bundle I/O ===
@@ -94,397 +127,626 @@ def extract_textasset_raw(bundle_path: str):
     for obj in env.objects:
         if obj.type.name == "TextAsset":
             obj.reset()
-            reader = obj.reader
-            reader.Position = obj.byte_start
-            raw = reader.read(obj.byte_size)
+            r = obj.reader
+            r.Position = obj.byte_start
+            raw = r.read(obj.byte_size)
             pos = 0
             name_len = struct.unpack_from('<i', raw, pos)[0]; pos += 4
             name = raw[pos:pos + name_len].decode('utf-8', errors='replace'); pos += name_len
             pos = (pos + 3) & ~3
             script_len = struct.unpack_from('<i', raw, pos)[0]; pos += 4
-            script_data = raw[pos:pos + script_len]
-            return name, script_data
+            return name, raw[pos:pos + script_len]
     return None, None
 
 
-# === Dialogue Extraction ===
-
-def find_translatable_strings(data: bytes):
-    results = []
-    i = 9
-    while i < len(data) - 5:
-        if i + 5 <= len(data):
-            key = struct.unpack_from('<i', data, i)[0]
-            scene_tag = data[i + 4]
-            if scene_tag == 21 and 0 <= key < 10000:
-                scene_pos = i + 5
-                scene_id = struct.unpack_from('<i', data, scene_pos)[0]
-                scene_pos += 4
-                speakers_count = struct.unpack_from('<i', data, scene_pos)[0]
-                scene_pos += 4
-                if 0 <= speakers_count <= 10:
-                    valid = True
-                    for sp_idx in range(speakers_count):
-                        sp_start = scene_pos
-                        s, scene_pos = read_string(data, scene_pos)
-                        if s is not None and s != "":
-                            results.append((sp_start, scene_pos, s, "speaker", scene_id, sp_idx))
-                        elif s is None and scene_pos == sp_start:
-                            valid = False
-                            break
-                    if valid:
-                        text_start = scene_pos
-                        text, scene_pos = read_string(data, scene_pos)
-                        if text is not None and text != "":
-                            results.append((text_start, scene_pos, text, "text", scene_id, 0))
-                i += 5
-                continue
-        i += 1
-    return results
-
-
-def extract_dialogue(data: bytes):
-    pos = 0
-    tag = data[pos]; pos += 1
-    if tag != 2:
-        return None
-    story_id = struct.unpack_from('<i', data, pos)[0]; pos += 4
-    dict_count = struct.unpack_from('<i', data, pos)[0]; pos += 4
-    if dict_count < 0 or dict_count > 10000:
-        return None
-
-    result = {"id": story_id, "scene_count": dict_count, "scenes": []}
-    i = 9
-    while i < len(data) - 5:
-        if i + 5 <= len(data):
-            key = struct.unpack_from('<i', data, i)[0]
-            scene_tag = data[i + 4]
-            if scene_tag == 21 and 0 <= key < 10000:
-                scene_pos = i + 5
-                scene_id = struct.unpack_from('<i', data, scene_pos)[0]
-                scene_pos += 4
-                speakers_count = struct.unpack_from('<i', data, scene_pos)[0]
-                scene_pos += 4
-                if 0 <= speakers_count <= 10:
-                    speakers = []
-                    valid = True
-                    for _ in range(speakers_count):
-                        s, scene_pos = read_string(data, scene_pos)
-                        if scene_pos is None:
-                            valid = False
-                            break
-                        speakers.append(s)
-                    if valid:
-                        text, scene_pos = read_string(data, scene_pos)
-                        result["scenes"].append({
-                            "scene_id": scene_id,
-                            "speakers": speakers,
-                            "text": text,
-                        })
-                i += 5
-                continue
-        i += 1
-    return result
-
-
-# === Translation Application ===
-
-def apply_translations(data: bytes, translations: dict) -> bytes:
-    offsets = find_translatable_strings(data)
-    if not offsets:
-        return data
-    offsets.sort(key=lambda x: x[0])
-    result = bytearray()
-    prev_end = 0
-    for start, end, original, stype, scene_id, idx in offsets:
-        result.extend(data[prev_end:start])
-        translated = translations.get(original, original)
-        result.extend(write_string(translated))
-        prev_end = end
-    result.extend(data[prev_end:])
-    return bytes(result)
-
-
-# === Bundle Repacking ===
-
-def repack_bundle(original_path: str, output_path: str, translations: dict):
+def repack_bundle(original_path: str, output_path: str, mutate_plaintext):
+    """Decrypt the bundle's single TextAsset, run `mutate_plaintext(pt)` to
+    rewrite the plaintext, re-encrypt, save."""
     env = UnityPy.load(original_path)
     for obj in env.objects:
-        if obj.type.name == "TextAsset":
-            obj.reset()
-            reader = obj.reader
-            reader.Position = obj.byte_start
-            raw = reader.read(obj.byte_size)
+        if obj.type.name != "TextAsset":
+            continue
+        obj.reset()
+        r = obj.reader
+        r.Position = obj.byte_start
+        raw = r.read(obj.byte_size)
 
-            pos = 0
-            name_len = struct.unpack_from('<i', raw, pos)[0]; pos += 4
-            name_bytes = raw[pos:pos + name_len]; pos += name_len
-            pos = (pos + 3) & ~3
-            script_len = struct.unpack_from('<i', raw, pos)[0]; pos += 4
-            encrypted_data = raw[pos:pos + script_len]
+        pos = 0
+        name_len = struct.unpack_from('<i', raw, pos)[0]; pos += 4
+        name_bytes = raw[pos:pos + name_len]; pos += name_len
+        pos = (pos + 3) & ~3
+        script_len = struct.unpack_from('<i', raw, pos)[0]; pos += 4
+        enc_data = raw[pos:pos + script_len]
 
-            pt = decrypt(encrypted_data)
-            modified = apply_translations(pt, translations)
-            new_encrypted = encrypt(modified)
+        pt = decrypt(enc_data)
+        modified = mutate_plaintext(pt)
+        new_enc = encrypt(modified)
 
-            new_raw = bytearray()
-            new_raw.extend(struct.pack('<i', len(name_bytes)))
-            new_raw.extend(name_bytes)
-            while len(new_raw) % 4 != 0:
-                new_raw.append(0)
-            new_raw.extend(struct.pack('<i', len(new_encrypted)))
-            new_raw.extend(new_encrypted)
-
-            obj.set_raw_data(bytes(new_raw))
+        new_raw = bytearray()
+        new_raw.extend(struct.pack('<i', len(name_bytes)))
+        new_raw.extend(name_bytes)
+        while len(new_raw) % 4 != 0:
+            new_raw.append(0)
+        new_raw.extend(struct.pack('<i', len(new_enc)))
+        new_raw.extend(new_enc)
+        obj.set_raw_data(bytes(new_raw))
 
     with open(output_path, 'wb') as f:
         f.write(env.file.save())
 
 
-# === Commands ===
+# === Story dialogue ===
 
-BASE_DIR = r"C:\Users\hwwys\AppData\LocalLow\jp_co_happyelements\メルストM\AssetBundle\StandaloneWindows64"
-STORY_DIR = os.path.join(BASE_DIR, "StoryMasterData")
-MASTER_DIR = os.path.join(BASE_DIR, "MasterData")
-OUTPUT_DIR = r"D:\cs\workshop"
-
-
-def cmd_extract():
-    files = sorted(os.listdir(STORY_DIR))
-    print(f"Extracting dialogue from {len(files)} story bundles...")
-
-    all_stories = []
-    errors = []
-    t0 = time.time()
-
-    for i, fname in enumerate(files):
-        if i % 200 == 0:
-            print(f"  {i}/{len(files)} ({time.time() - t0:.1f}s)...")
-
-        fpath = os.path.join(STORY_DIR, fname)
-        try:
-            name, encrypted = extract_textasset_raw(fpath)
-            if encrypted is None:
-                errors.append({"file": fname, "error": "no TextAsset"})
-                continue
-            pt = decrypt(encrypted)
-            result = extract_dialogue(pt)
-            if result is None:
-                errors.append({"file": fname, "error": "parse failed"})
-                continue
-            result["bundle"] = fname
-            result["asset_name"] = name
-            all_stories.append(result)
-        except Exception as e:
-            errors.append({"file": fname, "error": str(e)})
-
-    elapsed = time.time() - t0
-    total_dialogue = sum(1 for s in all_stories for sc in s["scenes"] if sc["text"])
-
-    print(f"\nDone in {elapsed:.1f}s")
-    print(f"Stories: {len(all_stories)}/{len(files)}")
-    print(f"Total dialogue lines: {total_dialogue}")
-    print(f"Errors: {len(errors)}")
-
-    out_path = os.path.join(OUTPUT_DIR, "merc_storia_dialogue.json")
-    with open(out_path, 'w', encoding='utf-8') as f:
-        json.dump({"stories": all_stories, "errors": errors}, f, ensure_ascii=False, indent=2)
-    print(f"Saved to {out_path} ({os.path.getsize(out_path) / 1024 / 1024:.1f} MB)")
-
-
-def cmd_extract_meta():
-    # StoryMasterData
-    story_bundle = os.path.join(MASTER_DIR, "d5f5fd6024911c22fa99b59427270214.bundle")
-    _, enc = extract_textasset_raw(story_bundle)
-    pt = decrypt(enc)
-
+def extract_dialogue(data: bytes):
+    """Parse StoryYamlData -> {story_id, scene_count, scenes:[{scene_id, speakers, text}]}."""
     pos = 0
-    tag = pt[pos]; pos += 1
-    count = struct.unpack_from('<i', pt, pos)[0]; pos += 4
+    if not data or data[pos] != 2:
+        return None
+    pos += 1
+    story_id = struct.unpack_from('<i', data, pos)[0]; pos += 4
+    dict_count = struct.unpack_from('<i', data, pos)[0]; pos += 4
+    if dict_count < 0 or dict_count > 10000:
+        return None
 
-    story_records = []
+    scenes = []
+    i = 9
+    while i < len(data) - 5:
+        key = struct.unpack_from('<i', data, i)[0]
+        scene_tag = data[i + 4]
+        if scene_tag == 21 and 0 <= key < 10000:
+            sp = i + 5
+            scene_id = struct.unpack_from('<i', data, sp)[0]; sp += 4
+            sc_cnt = struct.unpack_from('<i', data, sp)[0]; sp += 4
+            if 0 <= sc_cnt <= 10:
+                speakers = []
+                ok = True
+                cur = sp
+                for _ in range(sc_cnt):
+                    s, cur = read_string(data, cur)
+                    speakers.append(s)
+                if ok:
+                    text, _ = read_string(data, cur)
+                    scenes.append({
+                        "scene_id": scene_id,
+                        "speakers": speakers,
+                        "text": text,
+                    })
+            i += 5
+            continue
+        i += 1
+    return {"story_id": story_id, "scene_count": dict_count, "scenes": scenes}
+
+
+def find_story_strings(data: bytes):
+    """Walk StoryYamlData and yield (start, end, value, kind, scene_id, idx) for
+    every (Speaker, Text) slot. Empty/null slots are skipped — they have nothing
+    to replace and the walk's anchor logic doesn't need them."""
+    out = []
+    i = 9
+    while i < len(data) - 5:
+        key = struct.unpack_from('<i', data, i)[0]
+        scene_tag = data[i + 4]
+        if scene_tag == 21 and 0 <= key < 10000:
+            sp = i + 5
+            scene_id = struct.unpack_from('<i', data, sp)[0]; sp += 4
+            speakers_count = struct.unpack_from('<i', data, sp)[0]; sp += 4
+            if 0 <= speakers_count <= 10:
+                valid = True
+                for j in range(speakers_count):
+                    s_start = sp
+                    s, sp = read_string(data, s_start)
+                    if s is not None and s != "":
+                        out.append((s_start, sp, s, "speaker", scene_id, j))
+                    elif s is None and sp == s_start:
+                        valid = False
+                        break
+                if valid:
+                    t_start = sp
+                    text, sp = read_string(data, t_start)
+                    if text is not None and text != "":
+                        out.append((t_start, sp, text, "text", scene_id, 0))
+            i += 5
+            continue
+        i += 1
+    return out
+
+
+def apply_story_json(data: bytes, story: dict) -> bytes:
+    """Replace each (Speaker, Text) slot whose JSON value differs from the
+    original. Bundle bytes outside string slots are preserved verbatim."""
+    lookup = {}
+    for sc in story.get("scenes", []):
+        sid = sc.get("scene_id")
+        for i, sp in enumerate(sc.get("speakers", [])):
+            lookup[(sid, "speaker", i)] = sp
+        lookup[(sid, "text", 0)] = sc.get("text")
+
+    offsets = find_story_strings(data)
+    if not offsets:
+        return data
+
+    out = bytearray()
+    prev = 0
+    for start, end, original, kind, sid, idx in offsets:
+        new_value = lookup.get((sid, kind, idx), original)
+        if new_value != original:
+            out.extend(data[prev:start])
+            out.extend(write_string(new_value))
+            prev = end
+    out.extend(data[prev:])
+    return bytes(out)
+
+
+# === Generic MemoryPack string scan (MasterData) ===
+
+def find_all_strings(data: bytes):
+    """Walk the buffer, return [(offset, length, value)] for every MemoryPack
+    UTF-8 string. Self-validating via UTF-8 decode + char-count match, so it
+    handles arbitrary MemoryPack-emitted blobs without a schema.
+
+    `length` covers the full prefix + payload: int32 header + (for non-null and
+    non-empty strings) int32 charCount + utf8 bytes."""
+    out = []
+    i = 0
+    while i < len(data) - 4:
+        raw = struct.unpack_from('<i', data, i)[0]
+        if raw < -1 and raw > -100000:
+            bc = ~raw
+            if bc > 0 and i + 8 + bc <= len(data):
+                cc = struct.unpack_from('<i', data, i + 4)[0]
+                if 0 < cc <= bc:
+                    try:
+                        s = data[i + 8:i + 8 + bc].decode('utf-8', errors='strict')
+                        if len(s) == cc:
+                            out.append((i, 8 + bc, s))
+                            i += 8 + bc
+                            continue
+                    except UnicodeDecodeError:
+                        pass
+        i += 1
+    return out
+
+
+def apply_misc_json(data: bytes, doc: dict) -> bytes:
+    """Replace each MemoryPack string whose `strings[i].value` in the JSON
+    differs from the original. Matched by byte offset."""
+    by_offset = {s["offset"]: s["value"] for s in doc.get("strings", [])}
+    items = find_all_strings(data)
+    if not items:
+        return data
+
+    out = bytearray()
+    prev = 0
+    for offset, length, original in items:
+        new_value = by_offset.get(offset, original)
+        if new_value != original:
+            out.extend(data[prev:offset])
+            out.extend(write_string(new_value))
+            prev = offset + length
+    out.extend(data[prev:])
+    return bytes(out)
+
+
+# === Metadata: StoryMasterData + ChapterMasterData ===
+
+def parse_story_master(bundle_path: str):
+    _, enc = extract_textasset_raw(bundle_path)
+    pt = decrypt(enc)
+    pos = 0
+    pos += 1
+    count = struct.unpack_from('<i', pt, pos)[0]; pos += 4
+    records = []
     for _ in range(count):
-        mc = pt[pos]; pos += 1
+        pos += 1
         chapter_id = struct.unpack_from('<i', pt, pos)[0]; pos += 4
         story_id = struct.unpack_from('<i', pt, pos)[0]; pos += 4
         title, pos = read_string(pt, pos)
         episode, pos = read_string(pt, pos)
         scene_key, pos = read_string(pt, pos)
-        unlock_type = struct.unpack_from('<i', pt, pos)[0]; pos += 4
-        field6, pos = read_string(pt, pos)
-        field7, pos = read_string(pt, pos)
+        struct.unpack_from('<i', pt, pos)[0]; pos += 4
+        _f6, pos = read_string(pt, pos)
+        _f7, pos = read_string(pt, pos)
         display_order = struct.unpack_from('<i', pt, pos)[0]; pos += 4
-        story_records.append({
-            "chapter_id": chapter_id, "story_id": story_id,
-            "title": title, "episode": episode, "scene_key": scene_key,
+        records.append({
+            "chapter_id": chapter_id,
+            "story_id": story_id,
+            "title": title,
+            "episode": episode,
+            "scene_key": scene_key,
             "display_order": display_order,
         })
+    return records
 
-    # ChapterMasterData
-    chapter_bundle = os.path.join(MASTER_DIR, "357536dd738af9be5b6f3e5b60d3cc89.bundle")
-    _, enc = extract_textasset_raw(chapter_bundle)
+
+def parse_chapter_master(bundle_path: str):
+    _, enc = extract_textasset_raw(bundle_path)
     pt = decrypt(enc)
-
     pos = 0
-    tag = pt[pos]; pos += 1
+    pos += 1
     count = struct.unpack_from('<i', pt, pos)[0]; pos += 4
-
-    chapter_records = []
+    out = {}
     for _ in range(count):
         mc = pt[pos]; pos += 1
-        fields = []
-        for fi in range(mc):
+        if pos + 4 > len(pt):
+            break
+        chapter_id = struct.unpack_from('<i', pt, pos)[0]; pos += 4
+        name, pos = read_string(pt, pos)
+        for _ in range(max(0, mc - 2)):
             if pos + 4 > len(pt):
                 break
             raw = struct.unpack_from('<i', pt, pos)[0]
-            if raw == -1:
-                fields.append(None); pos += 4
-            elif raw == 0:
-                fields.append(""); pos += 4
+            if raw == -1 or raw == 0:
+                pos += 4
             elif raw < -1 and raw > -100000:
                 bc = ~raw
-                if bc > 0 and pos + 8 + bc <= len(pt):
-                    cc = struct.unpack_from('<i', pt, pos + 4)[0]
-                    if 0 < cc <= bc:
-                        try:
-                            s = pt[pos + 8:pos + 8 + bc].decode('utf-8')
-                            if len(s) == cc:
-                                fields.append(s); pos += 8 + bc; continue
-                        except:
-                            pass
-                fields.append(raw); pos += 4
+                if pos + 8 + bc <= len(pt):
+                    pos += 8 + bc
+                else:
+                    pos += 4
             else:
-                fields.append(raw); pos += 4
-        chapter_records.append({
-            "id": fields[0] if len(fields) > 0 else None,
-            "name": fields[1] if len(fields) > 1 else None,
-            "fields": fields,
-        })
-
-    metadata = {"stories": story_records, "chapters": chapter_records}
-    out_path = os.path.join(OUTPUT_DIR, "merc_metadata.json")
-    with open(out_path, 'w', encoding='utf-8') as f:
-        json.dump(metadata, f, ensure_ascii=False, indent=2)
-
-    print(f"Stories: {len(story_records)}, Chapters: {len(chapter_records)}")
-    print(f"Saved to {out_path}")
-
-    # Build chapter name lookup
-    ch_map = {c["id"]: c["name"] for c in chapter_records}
-    # Show some examples
-    for s in story_records[:5]:
-        ch_name = ch_map.get(s["chapter_id"], "?")
-        print(f"  Story {s['story_id']}: [{ch_name}] {s['episode']} - {s['title']}")
+                pos += 4
+        out[chapter_id] = name
+    return out
 
 
-def cmd_repack(translation_json_path: str):
-    with open(translation_json_path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
+# === Layout ===
 
-    output_dir = os.path.join(OUTPUT_DIR, "repacked")
-    os.makedirs(output_dir, exist_ok=True)
+BASE_DIR = (
+    r"C:\Users\hwwys\AppData\LocalLow\jp_co_happyelements"
+    r"\メルストM\AssetBundle\StandaloneWindows64"
+)
+STORY_DIR = os.path.join(BASE_DIR, "StoryMasterData")
+MASTER_DIR = os.path.join(BASE_DIR, "MasterData")
+OUTPUT_DIR = r"D:\cs\workshop"
 
-    stories = data.get("stories", [])
-    print(f"Repacking {len(stories)} stories...")
+EXTRACT_ROOT = os.path.join(OUTPUT_DIR, "extracted_data")
+STORY_OUT = os.path.join(EXTRACT_ROOT, "story")
+MISC_OUT = os.path.join(EXTRACT_ROOT, "misc")
+FINGERPRINTS_PATH = os.path.join(EXTRACT_ROOT, ".fingerprints.pkl")
+
+REPACK_ROOT = os.path.join(OUTPUT_DIR, "repacked_bundles")
+REPACK_STORY = os.path.join(REPACK_ROOT, "story")
+REPACK_MISC = os.path.join(REPACK_ROOT, "misc")
+
+STORY_MASTER_BUNDLE = "d5f5fd6024911c22fa99b59427270214.bundle"
+CHAPTER_MASTER_BUNDLE = "357536dd738af9be5b6f3e5b60d3cc89.bundle"
+
+MISC_BUNDLES = {
+    "15dfc167a270133340e8dea7eca1f8bc.bundle": "MonsterMasterData",
+    "1a1f221889c7113c4fc81d5269cd2c8f.bundle": "UnitSkillEffectMasterData",
+    "200a6b75588cb6f880a05c085cdfa139.bundle": "MemorialQuestMasterData",
+    "2aa2ac58c76235a153adfd6824be18d8.bundle": "SquareBackgroundMasterData",
+    "357536dd738af9be5b6f3e5b60d3cc89.bundle": "ChapterMasterData",
+    "361e6b4412879287d31c75df82baa481.bundle": "UnitMasterData",
+    "3baee6fe788b15ee5e1e855dc4a76226.bundle": "StampMasterData",
+    "3cb553ddf329cfa9ad0373e6f9843b13.bundle": "MainCharacterStyleMasterData",
+    "66fb180f1c0d2c8e7b5fc08d5f1d3822.bundle": "LoadingComicMasterData",
+    "89b2fa703971c113719ac402372357d6.bundle": "GuildMapConditionMasterData",
+    "9b540a617789744fadadf9265d05d2aa.bundle": "LeaderStyleMasterData",
+    "d5f5fd6024911c22fa99b59427270214.bundle": "StoryMasterData",
+    "e4d718566461853b73497ce861cbeb76.bundle": "BackgroundMasterData",
+    "e79dbe20ad92ab8b77c2738a33353c6d.bundle": "BackgroundMusicMasterData",
+    "fc1bc9134e3211e77ec9b57808b84cd8.bundle": "GuildTournamentMasterData",
+}
+
+
+def has_jp(s: str) -> bool:
+    if not s:
+        return False
+    return any(
+        '぀' <= c <= 'ヿ' or '一' <= c <= '鿿' or '＀' <= c <= 'ﾟ'
+        for c in s
+    )
+
+
+# === Fingerprints ===
+
+def sha256_bytes(b: bytes) -> str:
+    return hashlib.sha256(b).hexdigest()
+
+
+def sha256_file(path: str) -> str:
+    with open(path, 'rb') as f:
+        return sha256_bytes(f.read())
+
+
+def load_fingerprints() -> dict:
+    if not os.path.exists(FINGERPRINTS_PATH):
+        return {}
+    try:
+        with open(FINGERPRINTS_PATH, 'rb') as f:
+            return pickle.load(f)
+    except Exception:
+        return {}
+
+
+def save_fingerprints(fps: dict):
+    os.makedirs(EXTRACT_ROOT, exist_ok=True)
+    with open(FINGERPRINTS_PATH, 'wb') as f:
+        pickle.dump(fps, f)
+
+
+def write_json_with_fingerprint(path: str, payload: dict, fps: dict, key: str):
+    body = json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8')
+    with open(path, 'wb') as f:
+        f.write(body)
+    fps[key] = sha256_bytes(body)
+
+
+# === Commands ===
+
+def cmd_extract_story():
+    os.makedirs(STORY_OUT, exist_ok=True)
+    fps = load_fingerprints()
+
+    print("Loading metadata (StoryMasterData + ChapterMasterData)...")
+    try:
+        story_meta = parse_story_master(os.path.join(MASTER_DIR, STORY_MASTER_BUNDLE))
+        chapter_names = parse_chapter_master(os.path.join(MASTER_DIR, CHAPTER_MASTER_BUNDLE))
+    except Exception as e:
+        print(f"  WARN: could not load metadata ({e}); titles will be missing")
+        story_meta = []
+        chapter_names = {}
+
+    meta_by_id = {m["story_id"]: m for m in story_meta}
+    print(f"  loaded {len(story_meta)} story records, {len(chapter_names)} chapter names")
+
+    files = sorted(os.listdir(STORY_DIR))
+    print(f"Extracting {len(files)} story bundles -> {STORY_OUT}")
+
+    errors = []
+    index = {}
     t0 = time.time()
+    written = 0
+    for i, fname in enumerate(files):
+        if i % 500 == 0:
+            print(f"  {i}/{len(files)} ({time.time() - t0:.1f}s, {written} written)")
+        fpath = os.path.join(STORY_DIR, fname)
+        try:
+            name, enc = extract_textasset_raw(fpath)
+            if enc is None:
+                errors.append({"file": fname, "error": "no TextAsset"})
+                continue
+            pt = decrypt(enc)
+            parsed = extract_dialogue(pt)
+            if parsed is None:
+                errors.append({"file": fname, "error": "parse failed"})
+                continue
+            sid = parsed["story_id"]
+            meta = meta_by_id.get(sid, {})
 
-    for i, story in enumerate(stories):
-        if i % 100 == 0:
-            print(f"  {i}/{len(stories)} ({time.time() - t0:.1f}s)...")
+            # Metadata first, scenes last — translator sees context up-front.
+            payload = {
+                "story_id": sid,
+                "title": meta.get("title"),
+                "episode": meta.get("episode"),
+                "chapter_id": meta.get("chapter_id"),
+                "chapter_name": chapter_names.get(meta.get("chapter_id")),
+                "display_order": meta.get("display_order"),
+                "bundle": fname,
+                "asset_name": name,
+                "scene_count": parsed["scene_count"],
+                "scenes": parsed["scenes"],
+            }
+            index[fname] = sid
+            key = f"story/{sid}.json"
+            write_json_with_fingerprint(
+                os.path.join(STORY_OUT, f"{sid}.json"), payload, fps, key)
+            written += 1
+        except Exception as e:
+            errors.append({"file": fname, "error": str(e)})
 
+    with open(os.path.join(STORY_OUT, "_index.json"), 'w', encoding='utf-8') as f:
+        json.dump(index, f, ensure_ascii=False, indent=2)
+    with open(os.path.join(STORY_OUT, "_errors.json"), 'w', encoding='utf-8') as f:
+        json.dump(errors, f, ensure_ascii=False, indent=2)
+    save_fingerprints(fps)
+    print(f"\nDone in {time.time() - t0:.1f}s. Wrote {written} stories. Errors: {len(errors)}.")
+
+
+def cmd_extract_misc():
+    os.makedirs(MISC_OUT, exist_ok=True)
+    fps = load_fingerprints()
+
+    written = 0
+    for fname, asset_name in MISC_BUNDLES.items():
+        fpath = os.path.join(MASTER_DIR, fname)
+        if not os.path.exists(fpath):
+            print(f"  SKIP {fname}: not present in MasterData/")
+            continue
+        try:
+            name, enc = extract_textasset_raw(fpath)
+            pt = decrypt(enc)
+        except Exception as e:
+            print(f"  ERROR {fname}: {e}")
+            continue
+
+        items = find_all_strings(pt)
+        jp_count = sum(1 for _o, _l, s in items if has_jp(s))
+
+        payload = {
+            "asset": asset_name,
+            "bundle": fname,
+            "asset_name_in_bundle": name,
+            "total_strings": len(items),
+            "jp_strings": jp_count,
+            "strings": [
+                {"offset": off, "value": s, "is_jp": has_jp(s)}
+                for off, _, s in items
+            ],
+        }
+        key = f"misc/{asset_name}.json"
+        write_json_with_fingerprint(
+            os.path.join(MISC_OUT, f"{asset_name}.json"), payload, fps, key)
+        written += 1
+        print(f"  {asset_name:32s}  total={len(items):5d}  jp={jp_count:5d}")
+
+    save_fingerprints(fps)
+    print(f"\nWrote {written} misc bundles to {MISC_OUT}")
+
+
+def cmd_extract():
+    cmd_extract_story()
+    print()
+    cmd_extract_misc()
+
+
+def _is_modified(path: str, key: str, fps: dict, force: bool) -> bool:
+    if force:
+        return True
+    baseline = fps.get(key)
+    if baseline is None:
+        return False  # never extracted with current toolkit -> nothing to compare; treat as untouched
+    return sha256_file(path) != baseline
+
+
+def cmd_repack_story(force: bool = False):
+    if not os.path.isdir(STORY_OUT):
+        print(f"ERROR: {STORY_OUT} does not exist; run `extract-story` first.")
+        sys.exit(1)
+    os.makedirs(REPACK_STORY, exist_ok=True)
+    fps = load_fingerprints()
+
+    repacked = 0
+    skipped = 0
+    failed = 0
+    t0 = time.time()
+    for fname in sorted(os.listdir(STORY_OUT)):
+        if not fname.endswith(".json") or fname.startswith("_"):
+            continue
+        fpath = os.path.join(STORY_OUT, fname)
+        key = f"story/{fname}"
+        if not _is_modified(fpath, key, fps, force):
+            skipped += 1
+            continue
+        with open(fpath, 'rb') as f:
+            story = json.loads(f.read().decode('utf-8'))
         bundle = story.get("bundle")
         if not bundle:
+            failed += 1
             continue
-
-        # Build translations dict from scenes
-        translations = {}
-        has_translation = False
-        for scene in story.get("scenes", []):
-            orig_text = scene.get("text")
-            trans_text = scene.get("translated_text")
-            if orig_text and trans_text and orig_text != trans_text:
-                translations[orig_text] = trans_text
-                has_translation = True
-
-            # Speaker translations
-            for j, speaker in enumerate(scene.get("speakers", [])):
-                trans_speaker = None
-                trans_speakers = scene.get("translated_speakers")
-                if trans_speakers and j < len(trans_speakers):
-                    trans_speaker = trans_speakers[j]
-                if speaker and trans_speaker and speaker != trans_speaker:
-                    translations[speaker] = trans_speaker
-
-        if not has_translation:
-            continue
-
         src = os.path.join(STORY_DIR, bundle)
-        dst = os.path.join(output_dir, bundle)
+        dst = os.path.join(REPACK_STORY, bundle)
         try:
-            repack_bundle(src, dst, translations)
+            repack_bundle(src, dst, lambda pt, _s=story: apply_story_json(pt, _s))
+            repacked += 1
         except Exception as e:
-            print(f"  ERROR repacking {bundle}: {e}")
+            print(f"  ERROR {bundle}: {e}")
+            failed += 1
 
-    elapsed = time.time() - t0
-    repacked = len([f for f in os.listdir(output_dir) if f.endswith('.bundle')])
-    print(f"\nDone in {elapsed:.1f}s, {repacked} bundles repacked")
-    print(f"Output: {output_dir}")
-    print(f"\nTo install: copy repacked bundles to {STORY_DIR}")
+    print(f"\nStory repack done in {time.time() - t0:.1f}s.")
+    print(f"  repacked: {repacked}")
+    print(f"  skipped (unmodified): {skipped}")
+    print(f"  failed: {failed}")
+    print(f"  output: {REPACK_STORY}")
+
+
+def cmd_repack_misc(force: bool = False):
+    if not os.path.isdir(MISC_OUT):
+        print(f"ERROR: {MISC_OUT} does not exist; run `extract-misc` first.")
+        sys.exit(1)
+    os.makedirs(REPACK_MISC, exist_ok=True)
+    fps = load_fingerprints()
+
+    repacked = 0
+    skipped = 0
+    failed = 0
+    for fname in sorted(os.listdir(MISC_OUT)):
+        if not fname.endswith(".json"):
+            continue
+        fpath = os.path.join(MISC_OUT, fname)
+        key = f"misc/{fname}"
+        if not _is_modified(fpath, key, fps, force):
+            skipped += 1
+            continue
+        with open(fpath, 'rb') as f:
+            doc = json.loads(f.read().decode('utf-8'))
+        bundle = doc.get("bundle")
+        if not bundle:
+            failed += 1
+            continue
+        src = os.path.join(MASTER_DIR, bundle)
+        dst = os.path.join(REPACK_MISC, bundle)
+        try:
+            repack_bundle(src, dst, lambda pt, _d=doc: apply_misc_json(pt, _d))
+            repacked += 1
+            print(f"  {doc.get('asset', bundle)} -> {dst}")
+        except Exception as e:
+            print(f"  ERROR {bundle}: {e}")
+            failed += 1
+
+    print(f"\nMisc repack: {repacked} repacked, {skipped} skipped (unmodified), {failed} failed")
+    print(f"Output: {REPACK_MISC}")
+
+
+def cmd_repack(force: bool = False):
+    cmd_repack_story(force=force)
+    print()
+    cmd_repack_misc(force=force)
 
 
 def cmd_test_repack():
+    """Round-trip a single bundle: take its first text line, swap it for a
+    sentinel via apply_story_json, re-decrypt, confirm the sentinel survived."""
     test_bundle = os.path.join(STORY_DIR, "eb777f2829400cfced05a3761d77fd6a.bundle")
+    _, enc = extract_textasset_raw(test_bundle)
+    pt = decrypt(enc)
+    parsed = extract_dialogue(pt)
+    sentinel = "[TOOLKIT_ROUNDTRIP_OK]"
 
-    # Extract
-    _, encrypted = extract_textasset_raw(test_bundle)
-    pt = decrypt(encrypted)
-    offsets = find_translatable_strings(pt)
+    # Find the first scene with a non-empty text line and swap it.
+    swapped = False
+    for sc in parsed["scenes"]:
+        if sc.get("text"):
+            sc["text"] = sentinel
+            swapped = True
+            break
+    if not swapped:
+        print("Test bundle has no translatable text lines.")
+        return
 
-    target_key = None
-    for o in offsets:
-        if 'おやおや' in (o[2] or ''):
-            target_key = o[2]
+    out = os.path.join(OUTPUT_DIR, "test_repacked.bundle")
+    repack_bundle(test_bundle, out, lambda pt2, _s=parsed: apply_story_json(pt2, _s))
 
-    translations = {
-        target_key: "Oh my, it seems you don't understand that person's greatness.\r\nLord Taitenki is a great yokai who will become the leader of the Hyakki Yako.\r\nThe power of a mere shizumeki like myself is not truly needed.",
-        "しずめき": "Shizumeki",
-        "たいてんき": "Taitenki",
-        "メルク": "Merc",
-    }
-
-    output = os.path.join(OUTPUT_DIR, "test_repacked.bundle")
-    repack_bundle(test_bundle, output, translations)
-
-    # Verify
-    _, enc2 = extract_textasset_raw(output)
+    _, enc2 = extract_textasset_raw(out)
     pt2 = decrypt(enc2)
     result = extract_dialogue(pt2)
-    if result and b'greatness' in pt2:
-        print("Test repack: SUCCESS")
-        print(f"  Story {result['id']}: {len(result['scenes'])} scenes")
-        for sc in result['scenes']:
-            sp = ', '.join(s for s in sc['speakers'] if s) or '(narrator)'
-            text = sc['text'] or ''
-            if 'greatness' in text or 'Shizumeki' in sp:
-                print(f"  [{sp}] {text[:150]}")
-    else:
-        print("Test repack: FAILED")
+    ok = result and sentinel.encode() in pt2 and any(
+        sc.get("text") == sentinel for sc in result["scenes"]
+    )
+    print("Test repack:", "SUCCESS" if ok else "FAILED")
+    if ok:
+        for sc in result["scenes"]:
+            if sc.get("text") == sentinel:
+                sp = ', '.join(s for s in sc["speakers"] if s) or '(narrator)'
+                print(f"  [{sp}] {sentinel}")
+                break
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Merc Storia Translation Toolkit")
-    parser.add_argument("command", choices=["extract", "extract-meta", "repack", "test-repack"])
-    parser.add_argument("args", nargs="*")
+    parser.add_argument(
+        "command",
+        choices=[
+            "extract", "extract-story", "extract-misc",
+            "repack", "repack-story", "repack-misc",
+            "test-repack",
+        ],
+    )
+    parser.add_argument("--force", action="store_true",
+                        help="Repack even files whose hash matches the recorded baseline.")
     args = parser.parse_args()
-
     if args.command == "extract":
         cmd_extract()
-    elif args.command == "extract-meta":
-        cmd_extract_meta()
+    elif args.command == "extract-story":
+        cmd_extract_story()
+    elif args.command == "extract-misc":
+        cmd_extract_misc()
     elif args.command == "repack":
-        if not args.args:
-            print("Usage: python merc_storia_toolkit.py repack <translation.json>")
-            sys.exit(1)
-        cmd_repack(args.args[0])
+        cmd_repack(force=args.force)
+    elif args.command == "repack-story":
+        cmd_repack_story(force=args.force)
+    elif args.command == "repack-misc":
+        cmd_repack_misc(force=args.force)
     elif args.command == "test-repack":
         cmd_test_repack()

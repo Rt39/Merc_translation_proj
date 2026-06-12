@@ -68,14 +68,23 @@ The three accomplishments stack:
    ────────────────────────────────────┘
                           │
                           ▼
-   extract_all.py / merc_storia_toolkit.py
-   ──────────────────────────────────────────────► dialogue.json (~4,000 stories)
+                merc_storia_toolkit.py extract
+                ──────────────────────────────►
+                       extracted_data/
+                         story/<id>.json        (4,008 stories, metadata
+                         misc/<AssetName>.json   first, then scenes / strings)
+                         .fingerprints.pkl      (SHA-256 of every output;
+                                                 lets repack skip untouched)
                           │
-                          ▼          (translate via LLM / human)
+                          ▼     (translator edits values in place — no
+                          │      separate "translations" dict; just
+                          │      replace the original text)
                           │
-                          ▼
-   merc_storia_toolkit.py repack
-   ──────────────────────────────────────────────► translated story bundles
+                merc_storia_toolkit.py repack
+                ──────────────────────────────►
+                       repacked_bundles/
+                         story/<bundle>         (only files whose SHA-256
+                         misc/<bundle>           drifted from the baseline)
                           │
                           ▼
    font_swap.py logofont.bundle
@@ -88,14 +97,15 @@ The three accomplishments stack:
 |---|---|
 | `patch_crc3.py` | Apply the 4 CRC-disable patches to `GameAssembly.dll` |
 | `merc_decrypt.py` | Decrypt + parse a single story bundle (reference implementation) |
-| `extract_all.py` | Extract dialogue from all ~4,000 story bundles into one JSON |
-| `extract_all_separate.py` | Same, but one JSON per story under `stories/<story_id>.json` |
+| `merc_storia_toolkit.py` | Unified CLI: `extract` / `extract-story` / `extract-misc` / `repack` / `repack-story` / `repack-misc` / `test-repack`. Fingerprints every extracted JSON; repack only touches files the translator edited. |
+| `scan_masterdata.py` | One-shot inventory of MasterData bundles, classifying which carry JP text |
+| `extract_all.py` | Legacy: dump all stories into one big JSON (superseded by `toolkit extract`) |
+| `extract_all_separate.py` | Legacy: per-story JSON without metadata (superseded by `toolkit extract`) |
 | `extract_dialogue.py` | Heuristic-based dialogue parser (no MemoryPack schema needed) |
-| `extract_masterdata.py` | Dump all `MasterData` bundles (chapter / story titles, item names) |
+| `extract_masterdata.py` | Raw dump of MasterData bundles (superseded by `toolkit extract-misc`) |
 | `extract_metadata_full.py` | Build story-id → chapter / title mapping |
 | `extract_story_metadata.py` | Same, lighter-weight version |
 | `repack.py` | Reference repack: TextAsset → encrypt → bundle |
-| `merc_storia_toolkit.py` | Unified CLI: extract / repack / metadata |
 | `fix_speakers3.py` | Global string-replace pass for speaker names (covers `CharacterYamlData.Key` / `.DisplayName`) |
 | `translate_1621.py` | Example: translate story 1621 into Chinese, end-to-end |
 | `verify_repack.py` | Decrypt a repacked bundle and confirm translated text round-trips |
@@ -122,8 +132,9 @@ The only non-Python prerequisite is **Il2CppDumper** (bundled under `Il2CppDumpe
 ## Status
 
 - [x] CRC bypass — stable, 4 patch sites
-- [x] Story text decrypt / extract — 4,000+ stories round-trip cleanly
-- [x] Story text repack with translated content — verified end-to-end
+- [x] Story text decrypt / extract — 4,008 stories with title / episode / chapter metadata
+- [x] MasterData text decrypt / extract — 15 bundles (~29 k JP strings: monsters, units, chapters, stamps, BG, BGM…)
+- [x] Story + MasterData repack with translated content — verified end-to-end
 - [x] Font replacement — Chinese SDF rendering correctly in both story and menu
 - [ ] Network layer disable (offline mode)
 - [ ] Path redirection so a translation build can ship as a side-by-side install
