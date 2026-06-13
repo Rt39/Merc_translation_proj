@@ -14,7 +14,7 @@ The patches in this guide stack on top of the bundle-CRC patches in
 - Target binary: `GameAssembly.dll` (~78 MB, IL2CPP-compiled managed runtime)
 - Steam runtime: `メルストM_Data/Plugins/x86_64/steam_api64.dll` (left in place; we only stop the game from *calling* into it)
 - CDN that the game tries to reach: `https://assets.mercstoria-memorial.hekk.org/AssetBundle/StandaloneWindows64/<Category>/<file>`
-- Bundled cache the patched binary reads from: `<game>/メルストM_Data/StreamingAssets/AssetBundle/StandaloneWindows64/<Category>/<file>` (every CDN bundle was moved here from LocalLow so the install is self-contained)
+- LocalLow cache the game falls back to: `%LOCALAPPDATA%/../LocalLow/jp_co_happyelements/メルストM/AssetBundle/StandaloneWindows64/<Category>/<file>`
 - Player log: `%LOCALAPPDATA%/../LocalLow/jp.co.happyelements/メルストM/Player.log` *(note the dots vs underscores — Unity has two profile-name conventions)*
 
 ## What "offline mode" means here
@@ -32,7 +32,7 @@ start. Without network, the per-category catalog refresh fails, a
 
 After this patch, neither matters. Steam init becomes a no-op, every Steam
 accessor returns the dev's hardcoded defaults, and every CDN GET is served
-synchronously from the bundled StreamingAssets folder via a direct file read in the patched
+synchronously from the LocalLow cache via a direct file read in the patched
 binary. No proxy. No certificate. No local server.
 
 ## The patches
@@ -46,7 +46,7 @@ binary. No proxy. No certificate. No local server.
 | Y1 | `YetAnotherHttpHandler.get_SkipCertificateVerification` (`0x6BF200`) | `mov ax, 0x0101 ; ret` — Nullable<bool>(true). |
 | Y2 | `NativeClientSettings.get_SkipCertificateVerification` (`0x6B1170`) | Same. |
 | Y3 | One `call` site inside `AssetBundleHttpClient.ctor` (`0x27FA4F4`) | Re-target the call from `set_Http2Only` (RVA `0x6BF460`) to `set_SkipCertificateVerification` (RVA `0x6BF580`) — 2-byte rel32 nudge. |
-| P  | `AssetBundleHttpClient.<private 5-arg GetAsync>` (`0x27FA120`) | Overwrite with 136 bytes of x64 that read the URL, drop the host prefix, look up the matching file under `Application.streamingAssetsPath`, and return a synchronously-completed `ValueTask<byte[]>` with the file content. |
+| P  | `AssetBundleHttpClient.<private 5-arg GetAsync>` (`0x27FA120`) | Overwrite with 136 bytes of x64 that read the URL, drop the host prefix, look up the matching file under `Application.persistentDataPath`, and return a synchronously-completed `ValueTask<byte[]>` with the file content. |
 
 S1–S4 disable Steam. Y1–Y3 force the Cysharp/rustls TLS layer to accept any
 certificate. **P is the load-bearing patch** — it short-circuits the
@@ -110,7 +110,7 @@ public ValueTask<byte[]> GetAsync(string url, int retryCount, int maxRetry,
         ? url.Substring(44)
         : url.Substring(44, q - 44);
     string fullPath = Path.Combine(
-        UnityEngine.Application.streamingAssetsPath,
+        UnityEngine.Application.persistentDataPath,
         pathPart);
     byte[] bytes = File.ReadAllBytes(fullPath);
     return new ValueTask<byte[]>(bytes);
@@ -119,11 +119,9 @@ public ValueTask<byte[]> GetAsync(string url, int retryCount, int maxRetry,
 
 - `44` is the length of the prefix `https://assets.mercstoria-memorial.hekk.org/`.
   The URL path after the prefix is *exactly* the relative path under the
-  bundled-cache root, so we don't even need a `Replace('/','\\')`.
-- `Application.streamingAssetsPath` resolves to `<gameInstall>/メルストM_Data/StreamingAssets`,
-  which is Unity's standard "ship raw files with the build" location. Putting
-  the 15 GB CDN cache here makes the install fully self-contained — no LocalLow
-  dependency, no per-user state to migrate.
+  LocalLow cache root, so we don't even need a `Replace('/','\\')`.
+- `Application.persistentDataPath` resolves to the LocalLow cache root
+  (`%LOCALAPPDATA%/../LocalLow/jp_co_happyelements/メルストM`).
 - The synchronously-completed `ValueTask<byte[]>` is built directly in the
   caller-allocated 24-byte return slot: `_obj=null`, `_result=bytes`,
   `_token=_flags=0`.
@@ -207,7 +205,7 @@ Pure file-read GetAsync (P):
    relevant class declarations and reading off the `// RVA: 0x...`
    comments.
 3. For the pure-patch body, the IL2CPP helper RVAs (string ops, `Path.Combine`,
-   `File.ReadAllBytes`, `Application.streamingAssetsPath`) likewise came
+   `File.ReadAllBytes`, `Application.persistentDataPath`) likewise came
    straight from `dump.cs`.
 
 ## End-to-end test plan
@@ -223,7 +221,7 @@ Pure file-read GetAsync (P):
 6. Run `netstat -ano | findstr メルストM`'s PID and confirm the game has
    zero non-loopback established connections.
 
-If any specific bundle is missing from the bundled StreamingAssets folder, `File.ReadAllBytes`
+If any specific bundle is missing from your LocalLow cache, `File.ReadAllBytes`
 throws `FileNotFoundException`, the surrounding async state machine logs
 "GetAsync: Failed (URL: ...)" in Player.log, and the screen that needed
 that bundle won't load. Re-running the game once with the network on so the
