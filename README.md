@@ -75,6 +75,8 @@ Subtleties documented in the guide:
 
 Result: `メルストM.exe` boots end-to-end with the Steam Client closed and the network disconnected. The story chapter list shows up with all character art, localized labels, and fonts intact. No external processes, no certificate trust changes, no system-level config touched.
 
+For shipping the patched build as a single self-contained, copy-and-go directory, an additional one-shot `Setup.cmd` creates an NTFS junction so that the 15 GB CDN cache physically lives inside the game install folder rather than under `%LocalLow%`. The patched HTTP code path AND Unity's own Addressables runtime cache code path both transparently land on the bundled cache via the junction. See [`OFFLINE_MODE_GUIDE.md`](OFFLINE_MODE_GUIDE.md#shipping-a-self-contained-install).
+
 ## Workflow (full translation)
 
 The three accomplishments stack:
@@ -118,6 +120,7 @@ The three accomplishments stack:
 |---|---|
 | `patch_crc3.py` | Apply the 4 CRC-disable patches to `GameAssembly.dll` |
 | `patch_offline.py` | Apply the 6 offline-mode patches (Steam bypass + CDN short-circuit) |
+| `Setup.cmd` | One-shot NTFS-junction setup for self-contained installs (cache-in-game-folder); ships next to `メルストM.exe` |
 | `scan_offline_targets.py` | Disassemble the Steam / CDN methods we patch (used during discovery) |
 | `verify_offline_patch.py` | Read-only sanity check that both CRC + offline patches are present |
 | `merc_decrypt.py` | Decrypt + parse a single story bundle (reference implementation) |
@@ -161,6 +164,7 @@ The only non-Python prerequisite is **Il2CppDumper** (bundled under `Il2CppDumpe
 - [x] MasterData text decrypt / extract — 15 bundles (~29 k JP strings: monsters, units, chapters, stamps, BG, BGM…)
 - [x] Story + MasterData repack with translated content — verified end-to-end
 - [x] Font replacement — Chinese SDF rendering correctly in both story and menu
-- [x] Offline boot end-to-end — 7 patch sites (4 Steam + 3 Cysharp cert-skip) + FlClash `hosts:` override + local HTTPS server (`offline_server.py`). Reaches title → home menu → story chapter list with full art, no internet, no Steam.
-- [ ] Path redirection so a translation build can ship as a side-by-side install
+- [x] Offline boot end-to-end — 8 patch sites (4 Steam + 3 Cysharp cert-skip + 1 pure-patch GetAsync). Reaches title → home menu → story chapter list with full art, no internet, no Steam.
+- [x] Self-contained install — cache physically inside the game folder via NTFS junction created by `Setup.cmd`; copy the install dir, run Setup.cmd once, launch the exe.
+- [ ] Path redirection so a translation build can ship as a side-by-side install (orthogonal to above)
 - [ ] Translation memory + LLM pipeline for all 4,000+ stories

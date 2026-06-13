@@ -3,7 +3,8 @@
 Does NOT depend on a local server, certificate trust, hosts-file edits, or
 network access at runtime. Once applied, the game launches with the Steam
 Client closed and the network disconnected, reading every CDN bundle
-directly from the LocalLow cache.
+directly from the bundled cache folder inside the game install (next to the
+exe).
 
 Patches applied (idempotent — re-running is a no-op):
 
@@ -29,6 +30,13 @@ Patches applied (idempotent — re-running is a no-op):
        ValueTask<byte[]> with the file content. The public 2-arg and 4-arg
        overloads call this 5-arg via existing rel32 calls and propagate
        its result.
+
+       For shipping standalone: Setup.cmd in the game folder creates an
+       NTFS junction `<persistent>/AssetBundle` -> `<game>/AssetBundle`.
+       After running Setup.cmd once, the cache physically lives in the
+       game folder; persistent-path access (this patched code AND the
+       unpatched Unity Addressables runtime cache layer) transparently
+       lands there. Cache is bundled with the install.
 
 CRC patches (4 sites) are applied separately by patch_crc3.py and stack
 with these. Run patch_crc3.py first; then this script.
@@ -59,9 +67,9 @@ RVA_GETASYNC_5ARG        = 0x27FA120
 RVA_INDEXOF_CHAR         = 0x245FBE0   # System.String.IndexOf(char)
 RVA_SUBSTRING_1          = 0x2464640   # System.String.Substring(int)
 RVA_SUBSTRING_2          = 0x2464650   # System.String.Substring(int, int)
-RVA_PERSISTENT_PATH      = 0x3131000   # UnityEngine.Application.get_persistentDataPath()
 RVA_PATH_COMBINE         = 0x25DBE00   # System.IO.Path.Combine(string, string)
 RVA_READ_ALL_BYTES       = 0x25C2BE0   # System.IO.File.ReadAllBytes(string)
+RVA_PERSISTENT_PATH      = 0x3131000   # UnityEngine.Application.get_persistentDataPath()
 
 URL_PREFIX_LEN           = 44          # len("https://assets.mercstoria-memorial.hekk.org/")
 
@@ -118,6 +126,23 @@ def build_pure_getasync_body(start_rva):
         string full = Path.Combine(Application.persistentDataPath, p);
         byte[] b = File.ReadAllBytes(full);
         return new ValueTask<byte[]>(b);
+
+    NOTE: We use get_persistentDataPath, not get_dataPath or
+    get_streamingAssetsPath, because the latter two icalls hard-crash
+    when called from inside this patched method ("Faulting module: unknown",
+    AV at +0x8) — likely a cold-init issue specific to this IL2CPP build.
+    get_persistentDataPath is hit early by Unity itself during boot, so
+    its icall is hot by the time we reach this code.
+
+    NOTE on path location: cache files PHYSICALLY live in
+    <game>/AssetBundle/StandaloneWindows64/... after Setup.cmd creates an
+    NTFS junction at <persistentDataPath>/AssetBundle -> <game>/AssetBundle.
+    persistentDataPath access then transparently lands in the game folder
+    for BOTH this patched HTTP path AND the unpatched Unity Addressables
+    runtime cache code (which also reads/writes catalog.hash and bundle
+    files at persistentDataPath subpaths). Procmon confirmed the
+    Addressables code path is what crashes the game if cache is moved
+    away from persistentDataPath without the junction in place.
     """
     a = Asm(start_rva)
     a.emit(b"\x53")                              # push rbx
@@ -153,7 +178,13 @@ def build_pure_getasync_body(start_rva):
     a.emit(b"\x48\x8B\xD8")                      # mov rbx, rax          ; rbx = pathPart
 
     # baseDir = Application.persistentDataPath
-    a.emit(b"\x33\xC9")                          # xor ecx, ecx
+    #   = <persistentRoot>\jp_co_happyelements\メルストM
+    # On a shipped install, persistentRoot\<...>\AssetBundle is an NTFS
+    # junction pointing at <game install>\AssetBundle (Setup.cmd creates it
+    # on first run). So the bundles physically live in the game folder,
+    # and persistent-path access transparently lands there for both this
+    # patched HTTP path AND the unpatched Addressables cache code path.
+    a.emit(b"\x33\xC9")                          # xor ecx, ecx          ; MethodInfo*
     a.call_rel32(RVA_PERSISTENT_PATH)
 
     # fullPath = Path.Combine(baseDir, pathPart)

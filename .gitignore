@@ -10,12 +10,22 @@ wheels/
 # Tools
 Il2CppDumper/
 il2cpp_output/
+tools/
+
+# Procmon / debugging trace artifacts (large, ephemeral)
+procmon_logs/
+
+# Live working-state for cron-driven iterations (regenerated each run)
+STATE.md
 
 # Binary data (large, regeneratable)
 *.bin
 *.bundle
 *.bundle.bak
 *.bundle.original
+
+# Font file
+*.ttf
 
 # Extracted data (large, regeneratable)
 merc_storia_dialogue.json

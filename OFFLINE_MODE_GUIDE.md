@@ -35,6 +35,12 @@ accessor returns the dev's hardcoded defaults, and every CDN GET is served
 synchronously from the LocalLow cache via a direct file read in the patched
 binary. No proxy. No certificate. No local server.
 
+For shipping a self-contained install where the cache PHYSICALLY lives inside
+the game folder, an additional one-shot `Setup.cmd` creates an NTFS junction
+`<persistentDataPath>/AssetBundle` -> `<game install>/AssetBundle`. See
+[**Shipping a self-contained install**](#shipping-a-self-contained-install)
+below.
+
 ## The patches
 
 | ID | Method (RVA in `il2cpp_output/dump.cs`) | What it does |
@@ -208,17 +214,93 @@ Pure file-read GetAsync (P):
    `File.ReadAllBytes`, `Application.persistentDataPath`) likewise came
    straight from `dump.cs`.
 
+## Shipping a self-contained install
+
+Goal: copy the install folder to another machine, run one setup script,
+double-click the exe. No Steam, no internet, no per-machine cache fetch.
+
+For that, the cache has to **physically live inside the game folder** —
+otherwise the user has to also ship 15 GB of LocalLow files separately
+and place them at the right per-user path.
+
+The patches above only redirect the CDN HTTP path. Unity's Addressables
+runtime ALSO reads/writes its own cache directly under `persistentDataPath`
+(catalog.hash, downloaded bundles, integrity checks) via code paths that
+live deep inside the Addressables / ResourceManager assemblies — not
+through `AssetBundleHttpClient.GetAsync`. Patching every one of those
+call sites is brittle and unbounded. So we redirect at the filesystem
+layer instead.
+
+`Setup.cmd` (lives next to the exe) creates a one-line NTFS junction:
+
+```
+mklink /J "%USERPROFILE%\AppData\LocalLow\jp_co_happyelements\メルストM\AssetBundle"  "%~dp0AssetBundle"
+```
+
+After Setup.cmd has been run once, `persistentDataPath\AssetBundle` is
+a reparse point pointing at the bundled `<install>\AssetBundle\`.
+The game's code and Unity's Addressables runtime BOTH happily land on
+the bundled cache; neither knows nor cares that the path traverses a
+junction. Re-running Setup.cmd is a safe no-op.
+
+Distribution layout:
+
+```
+<install>/
+  メルストM.exe
+  GameAssembly.dll          (patched)
+  メルストM_Data/
+  AssetBundle/              (the bundled 15 GB cache)
+    StandaloneWindows64/
+      Background/
+      ...
+      Unit/
+  Setup.cmd                 (one-shot junction setup)
+  ...
+```
+
+User workflow: copy the folder anywhere → double-click `Setup.cmd` once →
+double-click `メルストM.exe`. No further configuration.
+
+(Without Setup.cmd, the game launches, the patched HTTP code reads the
+catalog.hash files from the bundle, but ~14 s into startup the
+Addressables runtime queries `<persistent>\AssetBundle\<X>\catalog.hash`
+through its own code path, hits "path not found", and `Application.Quit`s
+cleanly. The junction collapses both code paths onto the same physical
+location.)
+
+### Diagnostic discovery
+
+Without the junction, the game exits ~14 s into startup. Procmon trace
+(`procmon_logs/trace2.csv` in the workspace during diagnosis) showed the
+relevant sequence on `MasterData/catalog.hash`:
+
+```
+18:02:31  Patched GetAsync reads <game>\AssetBundle\StandaloneWindows64\MasterData\catalog.hash  SUCCESS
+            -> game has the bytes in hand
+18:02:45  Unrelated code path: CreateFile <persistent>\AssetBundle\StandaloneWindows64\MasterData\catalog.hash  NAME NOT FOUND
+            -> Addressables thinks the cache is missing
+18:02:45  Thread Exit cascade across ~80 threads, process terminates cleanly
+```
+
+The first call goes through `AssetBundleHttpClient.GetAsync` (patched).
+The second goes through `UnityEngine.AddressableAssets` / `ResourceManager`
+internals — code that resolves the cache location FROM PERSISTENT PATH
+without ever touching our patch site. The fix isn't to chase those sites;
+it's to make `persistent path` mean "the game folder" via the junction.
+
 ## End-to-end test plan
 
 1. Apply CRC + offline patches.
 2. **Disconnect from network** (turn off WiFi, or block the game in firewall).
 3. **Exit Steam Client completely** (Steam → Exit).
-4. Launch `メルストM.exe` directly (not via Steam).
-5. Expect: title screen renders; pressing **Game Start** brings up the home
-   menu; tapping any of the bottom tabs (Home / Story / Guild / Gallery /
-   Park) brings up the corresponding screen with full art and localised
-   labels.
-6. Run `netstat -ano | findstr メルストM`'s PID and confirm the game has
+4. Run `Setup.cmd` once (only needed the first time after install).
+5. Launch `メルストM.exe` directly (not via Steam).
+6. Expect: title screen renders ("Merc StoriA" logo, "Game Start!" button);
+   pressing **Game Start** brings up the home menu; tapping any of the
+   bottom tabs (Home / Story / Guild / Gallery / Park) brings up the
+   corresponding screen with full art and localised labels.
+7. Run `netstat -ano | findstr メルストM`'s PID and confirm the game has
    zero non-loopback established connections.
 
 If any specific bundle is missing from your LocalLow cache, `File.ReadAllBytes`
@@ -261,5 +343,6 @@ CDN fills in the missing bundle, then disconnecting, fixes it.
 |---|---|
 | `patch_offline.py` | Apply all eight offline-mode patches; idempotent. |
 | `verify_offline_patch.py` | Read-only sanity check on live DLL (CRC + offline). |
+| `Setup.cmd` | One-shot junction setup for self-contained installs (cache-in-game-folder). |
 | `il2cpp_output/dump.cs` | Source of truth for RVAs of each target method. |
 | `OFFLINE_MODE_GUIDE.md` | This file. |
