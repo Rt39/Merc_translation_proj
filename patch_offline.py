@@ -3,7 +3,7 @@
 Does NOT depend on a local server, certificate trust, hosts-file edits, or
 network access at runtime. Once applied, the game launches with the Steam
 Client closed and the network disconnected, reading every CDN bundle
-directly from the LocalLow cache.
+directly from the bundled StreamingAssets folder inside the game install.
 
 Patches applied (idempotent — re-running is a no-op):
 
@@ -25,7 +25,8 @@ Patches applied (idempotent — re-running is a no-op):
        The actual mechanism. Replaces the async state-machine setup with
        136 bytes of x64 that calls existing IL2CPP methods to read the URL,
        drop the host prefix, look up the matching file under
-       Application.persistentDataPath, and return a synchronously-completed
+       Application.streamingAssetsPath (i.e. <game>/メルストM_Data/StreamingAssets),
+       and return a synchronously-completed
        ValueTask<byte[]> with the file content. The public 2-arg and 4-arg
        overloads call this 5-arg via existing rel32 calls and propagate
        its result.
@@ -59,7 +60,7 @@ RVA_GETASYNC_5ARG        = 0x27FA120
 RVA_INDEXOF_CHAR         = 0x245FBE0   # System.String.IndexOf(char)
 RVA_SUBSTRING_1          = 0x2464640   # System.String.Substring(int)
 RVA_SUBSTRING_2          = 0x2464650   # System.String.Substring(int, int)
-RVA_PERSISTENT_PATH      = 0x3131000   # UnityEngine.Application.get_persistentDataPath()
+RVA_STREAMING_PATH       = 0x3131190   # UnityEngine.Application.get_streamingAssetsPath()
 RVA_PATH_COMBINE         = 0x25DBE00   # System.IO.Path.Combine(string, string)
 RVA_READ_ALL_BYTES       = 0x25C2BE0   # System.IO.File.ReadAllBytes(string)
 
@@ -115,7 +116,7 @@ def build_pure_getasync_body(start_rva):
     Behavior (C# equivalent):
         int q = url.IndexOf('?');
         string p = (q < 0) ? url.Substring(44) : url.Substring(44, q - 44);
-        string full = Path.Combine(Application.persistentDataPath, p);
+        string full = Path.Combine(Application.streamingAssetsPath, p);
         byte[] b = File.ReadAllBytes(full);
         return new ValueTask<byte[]>(b);
     """
@@ -152,9 +153,9 @@ def build_pure_getasync_body(start_rva):
     a.label("after_substring")
     a.emit(b"\x48\x8B\xD8")                      # mov rbx, rax          ; rbx = pathPart
 
-    # baseDir = Application.persistentDataPath
+    # baseDir = Application.streamingAssetsPath  (bundled-data root in the game folder)
     a.emit(b"\x33\xC9")                          # xor ecx, ecx
-    a.call_rel32(RVA_PERSISTENT_PATH)
+    a.call_rel32(RVA_STREAMING_PATH)
 
     # fullPath = Path.Combine(baseDir, pathPart)
     a.emit(b"\x48\x8B\xC8")                      # mov rcx, rax

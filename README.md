@@ -65,7 +65,7 @@ Eight patch sites in `GameAssembly.dll` stack:
 
 2. **Cysharp YAHH accepts any cert (Y1–Y3, defense in depth)** — both `get_SkipCertificateVerification` getters return `Nullable<bool>(true)`, and one `call set_Http2Only` site inside `AssetBundleHttpClient.ctor` (RVA `0x27FA4F4`) is retargeted to `call set_SkipCertificateVerification` (rel32 nudge of `+0x120`). 3 patches. Strictly redundant once the next patch is in place but cheap and protects against any code path that might still go through HttpClient.
 
-3. **Pure file-read GetAsync (P)** — the private 5-arg `AssetBundleHttpClient.GetAsync` (RVA `0x27FA120`) is replaced with 136 bytes of x64 that read the URL, drop the host prefix `https://assets.mercstoria-memorial.hekk.org/` (44 bytes), look up the matching file under `Application.persistentDataPath`, and return a synchronously-completed `ValueTask<byte[]>` with the file content. Calls only existing IL2CPP-compiled methods (`String.IndexOf`, `String.Substring`, `Application.get_persistentDataPath`, `Path.Combine`, `File.ReadAllBytes`). The public 2-arg and 4-arg overloads forward to this 5-arg via existing rel32 calls and propagate its result. 1 patch.
+3. **Pure file-read GetAsync (P)** — the private 5-arg `AssetBundleHttpClient.GetAsync` (RVA `0x27FA120`) is replaced with 136 bytes of x64 that read the URL, drop the host prefix `https://assets.mercstoria-memorial.hekk.org/` (44 bytes), look up the matching file under `Application.streamingAssetsPath` (i.e. `<game>\メルストM_Data\StreamingAssets`), and return a synchronously-completed `ValueTask<byte[]>` with the file content. Calls only existing IL2CPP-compiled methods (`String.IndexOf`, `String.Substring`, `Application.get_streamingAssetsPath`, `Path.Combine`, `File.ReadAllBytes`). The public 2-arg and 4-arg overloads forward to this 5-arg via existing rel32 calls and propagate its result. 1 patch.
 
 Subtleties documented in the guide:
 
@@ -161,6 +161,6 @@ The only non-Python prerequisite is **Il2CppDumper** (bundled under `Il2CppDumpe
 - [x] MasterData text decrypt / extract — 15 bundles (~29 k JP strings: monsters, units, chapters, stamps, BG, BGM…)
 - [x] Story + MasterData repack with translated content — verified end-to-end
 - [x] Font replacement — Chinese SDF rendering correctly in both story and menu
-- [x] Offline boot end-to-end — 7 patch sites (4 Steam + 3 Cysharp cert-skip) + FlClash `hosts:` override + local HTTPS server (`offline_server.py`). Reaches title → home menu → story chapter list with full art, no internet, no Steam.
+- [x] Offline boot end-to-end — 8 patch sites (4 Steam + 3 Cysharp cert-skip + 1 pure file-read GetAsync). 15 GB of CDN cache moved from LocalLow into `メルストM_Data\StreamingAssets\` so the install is fully self-contained. Reaches title → home menu → story chapter list with full art, no internet, no Steam, no LocalLow.
 - [ ] Path redirection so a translation build can ship as a side-by-side install
 - [ ] Translation memory + LLM pipeline for all 4,000+ stories
