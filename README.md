@@ -2,11 +2,12 @@
 
 End-to-end toolkit for translating the Steam release of **メルクストーリア - 癒術士と心の旋律 -** (Merc Storia: Healers and the Melody of the Heart) into a non-Japanese language. The game ships with no built-in i18n; every step here is reverse-engineered.
 
-This repository documents three independent technical accomplishments that, together, make full translation possible:
+This repository documents four independent technical accomplishments that, together, make full translation possible:
 
 1. **Disabling the game's bundle CRC check** — patches in `GameAssembly.dll` that let us swap in modified asset bundles without triggering Unity's "data corruption" path.
 2. **Decrypting, extracting, and repacking all in-game text** — full pipeline for ~4,000 story bundles encrypted with AES-256-CBC + serialized with MemoryPack.
 3. **Replacing the bundled Japanese font** with an arbitrary TMP font asset (e.g. Chinese-glyph SDF), including the three physical places the font actually lives.
+4. **Removing the Steam dependency and short-circuiting the CDN** — six byte patches that let the game run with no Steam Client and no network, sourcing every asset from the local install + LocalLow cache.
 
 ## Game environment
 
@@ -54,6 +55,26 @@ The Japanese-only `RocknRollStd SDF` font lives in **three** physical places. Pa
 
 Result: arbitrary TMP fonts (Chinese, Korean, Latin) render correctly across both story screens and the title/home/menu UI.
 
+### 4. Offline mode — Steam bypass + Cysharp cert-skip + pure file-read GetAsync (see `OFFLINE_MODE_GUIDE.md`)
+
+End-to-end offline, no external moving parts: the game launches with no Steam Client and no internet, reaches the title screen, home menu, and story chapter list with every bundle loading correctly from the LocalLow cache. No local server, no certificate trust changes, no hosts-file edits.
+
+Eight patch sites in `GameAssembly.dll` stack:
+
+1. **Steam wrapper neutered (S1–S4)** — `SteamApplication.Initialize` and `Impl.Initialize` are turned into `ret`, and `Impl.GetLanguage` / `GetUserDataRootPath` tail-jump into the existing stub implementation (`SteamApplicationImplementationStub`). 4 patches. `SteamAPI_Init` is never called; every Steam accessor returns the dev's hardcoded defaults.
+
+2. **Cysharp YAHH accepts any cert (Y1–Y3, defense in depth)** — both `get_SkipCertificateVerification` getters return `Nullable<bool>(true)`, and one `call set_Http2Only` site inside `AssetBundleHttpClient.ctor` (RVA `0x27FA4F4`) is retargeted to `call set_SkipCertificateVerification` (rel32 nudge of `+0x120`). 3 patches. Strictly redundant once the next patch is in place but cheap and protects against any code path that might still go through HttpClient.
+
+3. **Pure file-read GetAsync (P)** — the private 5-arg `AssetBundleHttpClient.GetAsync` (RVA `0x27FA120`) is replaced with 136 bytes of x64 that read the URL, drop the host prefix `https://assets.mercstoria-memorial.hekk.org/` (44 bytes), look up the matching file under `Application.persistentDataPath`, and return a synchronously-completed `ValueTask<byte[]>` with the file content. Calls only existing IL2CPP-compiled methods (`String.IndexOf`, `String.Substring`, `Application.get_persistentDataPath`, `Path.Combine`, `File.ReadAllBytes`). The public 2-arg and 4-arg overloads forward to this 5-arg via existing rel32 calls and propagate its result. 1 patch.
+
+Subtleties documented in the guide:
+
+- The dead-code trap: `AssetBundleHttpClient.CreateHttpClient` (static, RVA `0x27F9FB0`) is **never called** — patching it does nothing. The HttpClient that the game uses is built in the instance ctor at RVA `0x27FA420`.
+- Why P targets the private 5-arg, not the public overloads: the 2-arg has 80 bytes of slack and the 4-arg has 96 bytes; a 136-byte body overflows them. The 5-arg has 464 bytes available.
+- Why the CDN cert is rejected even though it's valid: rustls (via `Cysharp.Net.Http`) bundles its own Mozilla webpki-roots and ignores the Windows root store. The user's outbound TUN proxy reshapes the chain enough to trigger `UnknownIssuer`. Skipping verification is the simplest fix.
+
+Result: `メルストM.exe` boots end-to-end with the Steam Client closed and the network disconnected. The story chapter list shows up with all character art, localized labels, and fonts intact. No external processes, no certificate trust changes, no system-level config touched.
+
 ## Workflow (full translation)
 
 The three accomplishments stack:
@@ -96,6 +117,9 @@ The three accomplishments stack:
 | Path | Purpose |
 |---|---|
 | `patch_crc3.py` | Apply the 4 CRC-disable patches to `GameAssembly.dll` |
+| `patch_offline.py` | Apply the 6 offline-mode patches (Steam bypass + CDN short-circuit) |
+| `scan_offline_targets.py` | Disassemble the Steam / CDN methods we patch (used during discovery) |
+| `verify_offline_patch.py` | Read-only sanity check that both CRC + offline patches are present |
 | `merc_decrypt.py` | Decrypt + parse a single story bundle (reference implementation) |
 | `merc_storia_toolkit.py` | Unified CLI: `extract` / `extract-story` / `extract-misc` / `repack` / `repack-story` / `repack-misc` / `test-repack`. Fingerprints every extracted JSON; repack only touches files the translator edited. |
 | `scan_masterdata.py` | One-shot inventory of MasterData bundles, classifying which carry JP text |
@@ -116,6 +140,7 @@ The three accomplishments stack:
 | `CRC_PATCH_GUIDE.md` | From-scratch guide: how to find and disable the CRC checks |
 | `TEXT_EXTRACTION_GUIDE.md` | From-scratch guide: AES key + MemoryPack + bundle repack pipeline |
 | `FONT_REPLACEMENT_GUIDE.md` | From-scratch guide: TMP font asset surgery, atlas atlas atlas |
+| `OFFLINE_MODE_GUIDE.md` | From-scratch guide: Steam wrapper + CDN HTTP client byte patches |
 
 ## Runtime requirement
 
@@ -136,6 +161,6 @@ The only non-Python prerequisite is **Il2CppDumper** (bundled under `Il2CppDumpe
 - [x] MasterData text decrypt / extract — 15 bundles (~29 k JP strings: monsters, units, chapters, stamps, BG, BGM…)
 - [x] Story + MasterData repack with translated content — verified end-to-end
 - [x] Font replacement — Chinese SDF rendering correctly in both story and menu
-- [ ] Network layer disable (offline mode)
+- [x] Offline boot end-to-end — 7 patch sites (4 Steam + 3 Cysharp cert-skip) + FlClash `hosts:` override + local HTTPS server (`offline_server.py`). Reaches title → home menu → story chapter list with full art, no internet, no Steam.
 - [ ] Path redirection so a translation build can ship as a side-by-side install
 - [ ] Translation memory + LLM pipeline for all 4,000+ stories
