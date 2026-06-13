@@ -1,15 +1,13 @@
 """Translate story 1621 into Chinese and repack the bundle."""
-import sys, io, struct, os, json
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+import sys, struct, os, json
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.primitives import hashes, padding as sym_padding
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives import padding as sym_padding
 import UnityPy
 
-kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32,
-                  salt=b"-2147483648", iterations=1024)
-AES_KEY = kdf.derive(b"2147483647")
+import mercstoria_config as cfg
+cfg.enable_utf8_stdout()
+AES_KEY = cfg.derive_aes_key()
 
 
 def decrypt(data):
@@ -415,7 +413,7 @@ TRANSLATIONS = {
     "「你们给吾记住——！」",
 }
 
-STORY_DIR = r"C:\Users\hwwys\AppData\LocalLow\jp_co_happyelements\メルストM\AssetBundle\StandaloneWindows64\StoryMasterData"
+STORY_DIR = str(cfg.story_masterdata_dir())
 BUNDLE = os.path.join(STORY_DIR, "eb777f2829400cfced05a3761d77fd6a.bundle")
 
 # Extract original
@@ -473,7 +471,8 @@ for obj in env2.objects:
     if obj.type.name == "TextAsset":
         obj.set_raw_data(bytes(new_raw))
 
-output = r"D:\cs\workshop\eb777f2829400cfced05a3761d77fd6a.bundle"
+output = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                      "eb777f2829400cfced05a3761d77fd6a.bundle")
 with open(output, 'wb') as f:
     f.write(env2.file.save())
 

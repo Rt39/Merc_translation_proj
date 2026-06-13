@@ -7,7 +7,7 @@ wheels/
 *.egg-info
 .venv/
 
-# Tools
+# Bundled third-party tools (download separately)
 Il2CppDumper/
 il2cpp_output/
 tools/
@@ -23,11 +23,12 @@ STATE.md
 *.bundle
 *.bundle.bak
 *.bundle.original
+test_repacked*.bundle
 
-# Font file
+# Font assets (large, distribution-restricted)
 *.ttf
 
-# Extracted data (large, regeneratable)
+# Extracted data (large, regeneratable by `merc_storia_toolkit.py extract`)
 merc_storia_dialogue.json
 merc_metadata.json
 jp_monobehaviours.txt
@@ -35,23 +36,13 @@ extracted_data/
 repacked_bundles/
 masterdata_scan.json
 
-# Test/intermediate bundles
-test_repacked*.bundle
-
-# Scratch/superseded scripts
-decrypt_test*.py
+# Generic scratch-script patterns. Anything ad-hoc / exploratory matching
+# these prefixes is left out of git unless explicitly `git add -f`'d.
 analyze_*.py
 disasm_*.py
-find_*.py
-scan_*.py
-test_*.py
-parse_*.py
-show_example.py
-trace_parse.py
-fix_speakers.py
-fix_speakers2.py
-patch_crc.py
-patch_crc2.py
-decrypt_final.py
-extract_example.py
-find_example.py
+trace_*.py
+*_scratch.py
+*_example.py
+
+# Launcher build artifacts (CMake)
+launcher/build/

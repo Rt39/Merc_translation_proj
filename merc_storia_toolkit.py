@@ -56,19 +56,18 @@ Data format: MemoryPack (UTF-8 mode)
     Null:    int32(-1)
     Empty:   int32(0)
 """
-import sys, io, struct, os, json, time, argparse, pickle, hashlib
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+import sys, struct, os, json, time, argparse, pickle, hashlib
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.primitives import hashes, padding as sym_padding
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives import padding as sym_padding
 import UnityPy
+
+import mercstoria_config as cfg
+cfg.enable_utf8_stdout()
 
 # === Crypto ===
 
-_kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32,
-                  salt=b"-2147483648", iterations=1024)
-AES_KEY = _kdf.derive(b"2147483647")
+AES_KEY = cfg.derive_aes_key()
 
 
 def decrypt(data: bytes) -> bytes:
@@ -92,6 +91,17 @@ def encrypt(pt: bytes) -> bytes:
 # === MemoryPack ===
 
 def read_string(data: bytes, pos: int):
+    """Read one MemoryPack string from `data` at `pos`. Returns (value, next_pos).
+
+    Wire format (UTF-8 mode, see https://github.com/Cysharp/MemoryPack):
+        int32  header     ~utf8_byte_count       (-1 = null, 0 = empty)
+        int32  char_count UTF-16 unit count      (ignored on read)
+        bytes  payload    UTF-8 encoded value
+
+    `value` is `None` on parse failure as well as for the explicit-null
+    case; callers that need to disambiguate check whether `next_pos`
+    advanced (failure = no advance past the header).
+    """
     if pos + 4 > len(data):
         return None, pos
     raw = struct.unpack_from('<i', data, pos)[0]
@@ -100,6 +110,8 @@ def read_string(data: bytes, pos: int):
         return None, pos
     if raw == 0:
         return "", pos
+    # MemoryPack stores ~(byte_count) as the header so non-null/non-empty
+    # strings have a negative int32 prefix. `bc` is the real byte length.
     bc = ~raw
     if bc > 0 and bc < 100000 and pos + 4 + bc <= len(data):
         struct.unpack_from('<i', data, pos)[0]  # char_count (UTF-16 units), ignored
@@ -112,6 +124,13 @@ def read_string(data: bytes, pos: int):
 
 
 def write_string(s) -> bytes:
+    """Encode `s` as a MemoryPack string. Inverse of `read_string`.
+
+    `char_count` is the Python `len(s)` — the count of UTF-16 code points
+    that MemoryPack-CSharp would have emitted. For surrogate-pair characters
+    this differs from `len(s.encode('utf-16-le')) // 2`; in practice no
+    in-game text uses astral codepoints so this approximation is exact.
+    """
     if s is None:
         return struct.pack('<i', -1)
     if s == "":
@@ -123,6 +142,20 @@ def write_string(s) -> bytes:
 # === Bundle I/O ===
 
 def extract_textasset_raw(bundle_path: str):
+    """Pull the (name, encrypted_payload) tuple out of a story / master-data bundle.
+
+    Each Merc Storia data bundle contains exactly one Unity `TextAsset` whose
+    serialized layout is:
+
+        int32  name_length
+        bytes  name           (UTF-8)
+        pad to 4-byte boundary
+        int32  script_length
+        bytes  script         (AES-256-CBC ciphertext with prepended IV)
+
+    Returns (None, None) if no TextAsset is found, which would indicate the
+    bundle is structurally different (e.g. a font or scene bundle).
+    """
     env = UnityPy.load(bundle_path)
     for obj in env.objects:
         if obj.type.name == "TextAsset":
@@ -133,6 +166,7 @@ def extract_textasset_raw(bundle_path: str):
             pos = 0
             name_len = struct.unpack_from('<i', raw, pos)[0]; pos += 4
             name = raw[pos:pos + name_len].decode('utf-8', errors='replace'); pos += name_len
+            # Unity aligns the script field to a 4-byte boundary.
             pos = (pos + 3) & ~3
             script_len = struct.unpack_from('<i', raw, pos)[0]; pos += 4
             return name, raw[pos:pos + script_len]
@@ -140,8 +174,22 @@ def extract_textasset_raw(bundle_path: str):
 
 
 def repack_bundle(original_path: str, output_path: str, mutate_plaintext):
-    """Decrypt the bundle's single TextAsset, run `mutate_plaintext(pt)` to
-    rewrite the plaintext, re-encrypt, save."""
+    """Round-trip a bundle through decrypt → mutate → re-encrypt → save.
+
+    Parameters:
+        original_path:   path to the unmodified bundle (kept read-only).
+        output_path:     where to write the modified bundle.
+        mutate_plaintext: callable `bytes -> bytes`. Receives the decrypted
+                         MemoryPack payload and returns the new bytes. Free
+                         to grow / shrink the payload — the surrounding
+                         TextAsset envelope is reconstructed around the new
+                         length and the AES re-encryption picks a fresh IV.
+
+    The new bundle has the same CAB / archive layout as the original; only
+    the TextAsset's `script_length` and `script` bytes change. CRC patches
+    (see `patch_crc.py`) must already be in place or Unity will reject the
+    altered bundle and silently re-download from the CDN.
+    """
     env = UnityPy.load(original_path)
     for obj in env.objects:
         if obj.type.name != "TextAsset":
@@ -330,6 +378,16 @@ def apply_misc_json(data: bytes, doc: dict) -> bytes:
 # === Metadata: StoryMasterData + ChapterMasterData ===
 
 def parse_story_master(bundle_path: str):
+    """Parse StoryMasterData -> list of {chapter_id, story_id, title, episode,
+    scene_key, display_order} dicts.
+
+    StoryMasterData is one of the MasterData bundles; it carries the title-
+    screen menu metadata for every story (which chapter it belongs to, the
+    episode label, the localised title shown in the chapter list). The
+    record layout uses MemoryPack with three int32 fields wrapped around
+    five strings — discovered empirically by diffing decrypted plaintexts
+    against the rendered menu.
+    """
     _, enc = extract_textasset_raw(bundle_path)
     pt = decrypt(enc)
     pos = 0
@@ -359,6 +417,14 @@ def parse_story_master(bundle_path: str):
 
 
 def parse_chapter_master(bundle_path: str):
+    """Parse ChapterMasterData -> {chapter_id: chapter_name} dict.
+
+    Each record's first byte is the count of MemoryPack members that follow
+    (variable, depends on chapter variant). Only the first two fields are
+    structurally fixed: int32 chapter_id and string chapter_name. The
+    remaining `mc - 2` fields are skipped by inspecting their MemoryPack
+    headers without decoding (we don't need their values for the toolkit).
+    """
     _, enc = extract_textasset_raw(bundle_path)
     pt = decrypt(enc)
     pos = 0
@@ -390,14 +456,14 @@ def parse_chapter_master(bundle_path: str):
 
 
 # === Layout ===
+#
+# Live cache lives under cfg.cache_root() (auto-detected from the game install
+# + USERPROFILE). Extract / repack output is written next to this script.
 
-BASE_DIR = (
-    r"C:\Users\hwwys\AppData\LocalLow\jp_co_happyelements"
-    r"\メルストM\AssetBundle\StandaloneWindows64"
-)
-STORY_DIR = os.path.join(BASE_DIR, "StoryMasterData")
-MASTER_DIR = os.path.join(BASE_DIR, "MasterData")
-OUTPUT_DIR = r"D:\cs\workshop"
+STORY_DIR  = str(cfg.story_masterdata_dir())
+MASTER_DIR = str(cfg.masterdata_dir())
+
+OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 EXTRACT_ROOT = os.path.join(OUTPUT_DIR, "extracted_data")
 STORY_OUT = os.path.join(EXTRACT_ROOT, "story")
@@ -431,6 +497,14 @@ MISC_BUNDLES = {
 
 
 def has_jp(s: str) -> bool:
+    """True if `s` contains any CJK code point that we treat as Japanese.
+
+    The ranges cover Hiragana + Katakana (U+3040–U+30FF), CJK Unified
+    Ideographs (U+4E00–U+9FFF — used heavily in kanji), and the fullwidth
+    block (U+FF00–U+FF9F — half/fullwidth romanji used in UI labels).
+    Used to filter MasterData strings down to the ones that look like JP
+    UI text rather than ASCII keys / GUIDs / numbers.
+    """
     if not s:
         return False
     return any(
@@ -440,17 +514,28 @@ def has_jp(s: str) -> bool:
 
 
 # === Fingerprints ===
+#
+# We checksum each extracted JSON the moment we write it and store the hash in
+# .fingerprints.pkl. On repack, files whose current hash matches the recorded
+# one are treated as untouched and skipped. That way a re-extract (which is
+# byte-identical) doesn't trigger a re-repack of every bundle.
 
 def sha256_bytes(b: bytes) -> str:
+    """Hex SHA-256 over a bytes buffer."""
     return hashlib.sha256(b).hexdigest()
 
 
 def sha256_file(path: str) -> str:
+    """Hex SHA-256 of the file at `path`. Loads the whole file into memory —
+    fine for translator JSONs (a few hundred KB max)."""
     with open(path, 'rb') as f:
         return sha256_bytes(f.read())
 
 
 def load_fingerprints() -> dict:
+    """Read .fingerprints.pkl. Returns an empty dict if the file is missing
+    or unreadable — losing the fingerprint cache forces a full repack but
+    is not otherwise destructive."""
     if not os.path.exists(FINGERPRINTS_PATH):
         return {}
     try:
@@ -461,12 +546,20 @@ def load_fingerprints() -> dict:
 
 
 def save_fingerprints(fps: dict):
+    """Write .fingerprints.pkl, creating the extract-root directory if needed."""
     os.makedirs(EXTRACT_ROOT, exist_ok=True)
     with open(FINGERPRINTS_PATH, 'wb') as f:
         pickle.dump(fps, f)
 
 
 def write_json_with_fingerprint(path: str, payload: dict, fps: dict, key: str):
+    """Write `payload` as pretty-printed JSON and record its SHA-256 under `key`.
+
+    `ensure_ascii=False` so Japanese characters appear in the file literally
+    (translators expect to see the Japanese, not `\\uxxxx` escapes). The
+    fingerprint is computed over the exact bytes we wrote, so an external
+    edit changes the hash deterministically.
+    """
     body = json.dumps(payload, ensure_ascii=False, indent=2).encode('utf-8')
     with open(path, 'wb') as f:
         f.write(body)
@@ -476,6 +569,16 @@ def write_json_with_fingerprint(path: str, payload: dict, fps: dict, key: str):
 # === Commands ===
 
 def cmd_extract_story():
+    """`extract-story` command: extract every story bundle to
+    extracted_data/story/<story_id>.json.
+
+    Each output file has the metadata (title, episode, chapter name,
+    display order, etc.) at the top followed by `scenes[]`. The
+    StoryMasterData + ChapterMasterData bundles are parsed first so we
+    can join story-id → title/episode. If those bundles can't be
+    decoded (e.g. game updated and the layout changed), extraction
+    continues with empty metadata rather than failing.
+    """
     os.makedirs(STORY_OUT, exist_ok=True)
     fps = load_fingerprints()
 
@@ -545,6 +648,13 @@ def cmd_extract_story():
 
 
 def cmd_extract_misc():
+    """`extract-misc` command: extract every MasterData bundle that holds JP
+    text to extracted_data/misc/<AssetName>.json.
+
+    The bundle whitelist (MISC_BUNDLES) is hardcoded — adding a new one is a
+    one-line edit. Each output file records every MemoryPack string with its
+    byte offset so the repack step can match exactly without re-walking.
+    """
     os.makedirs(MISC_OUT, exist_ok=True)
     fps = load_fingerprints()
 
@@ -586,12 +696,21 @@ def cmd_extract_misc():
 
 
 def cmd_extract():
+    """`extract` command — both story and misc, sequentially."""
     cmd_extract_story()
     print()
     cmd_extract_misc()
 
 
 def _is_modified(path: str, key: str, fps: dict, force: bool) -> bool:
+    """Decide whether to repack the file at `path`.
+
+    `key` is the per-file fingerprint key (e.g. `story/1621.json`). A file
+    is "modified" if its current SHA-256 differs from the one stored at
+    extract time, OR if `--force` is in effect, OR if no baseline exists
+    (in which case we conservatively SKIP the file, since we can't tell
+    whether the translator touched it).
+    """
     if force:
         return True
     baseline = fps.get(key)
@@ -601,6 +720,14 @@ def _is_modified(path: str, key: str, fps: dict, force: bool) -> bool:
 
 
 def cmd_repack_story(force: bool = False):
+    """`repack-story` command: rebuild every modified story JSON into a
+    UnityFS bundle under repacked_bundles/story/<bundle>.
+
+    "Modified" is decided by `_is_modified` (fingerprint mismatch). The
+    rename / move semantics of repack_bundle keep the original bundle
+    name so deploy_bundles.py can drop the new bundle straight onto
+    the live cache copy.
+    """
     if not os.path.isdir(STORY_OUT):
         print(f"ERROR: {STORY_OUT} does not exist; run `extract-story` first.")
         sys.exit(1)
@@ -642,6 +769,12 @@ def cmd_repack_story(force: bool = False):
 
 
 def cmd_repack_misc(force: bool = False):
+    """`repack-misc` command: same idea as `repack-story` but for MasterData.
+
+    Output bundles land in repacked_bundles/misc/<bundle>. Each bundle's
+    asset name is printed alongside so a translator scanning the output
+    can immediately tell whether the right MasterData asset was touched.
+    """
     if not os.path.isdir(MISC_OUT):
         print(f"ERROR: {MISC_OUT} does not exist; run `extract-misc` first.")
         sys.exit(1)
@@ -680,6 +813,7 @@ def cmd_repack_misc(force: bool = False):
 
 
 def cmd_repack(force: bool = False):
+    """`repack` command — both story and misc, sequentially."""
     cmd_repack_story(force=force)
     print()
     cmd_repack_misc(force=force)

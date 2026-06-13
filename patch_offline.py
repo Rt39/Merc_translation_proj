@@ -3,8 +3,7 @@
 Does NOT depend on a local server, certificate trust, hosts-file edits, or
 network access at runtime. Once applied, the game launches with the Steam
 Client closed and the network disconnected, reading every CDN bundle
-directly from the bundled cache folder inside the game install (next to the
-exe).
+directly from the bundled cache folder inside the game install.
 
 Patches applied (idempotent — re-running is a no-op):
 
@@ -23,55 +22,34 @@ Patches applied (idempotent — re-running is a no-op):
        never invoked once P is in place) but cheap.
 
   P:  AssetBundleHttpClient.<private 5-arg GetAsync>           -> read from disk
-       The actual mechanism. Replaces the async state-machine setup with
        136 bytes of x64 that calls existing IL2CPP methods to read the URL,
        drop the host prefix, look up the matching file under
        Application.persistentDataPath, and return a synchronously-completed
-       ValueTask<byte[]> with the file content. The public 2-arg and 4-arg
-       overloads call this 5-arg via existing rel32 calls and propagate
-       its result.
+       ValueTask<byte[]> with the file content.
 
-       For shipping standalone: Setup.cmd in the game folder creates an
-       NTFS junction `<persistent>/AssetBundle` -> `<game>/AssetBundle`.
-       After running Setup.cmd once, the cache physically lives in the
-       game folder; persistent-path access (this patched code AND the
-       unpatched Unity Addressables runtime cache layer) transparently
-       lands there. Cache is bundled with the install.
+       For shipping standalone: the launcher (or Setup.cmd fallback) creates
+       an NTFS junction `<persistent>/AssetBundle` -> `<game>/AssetBundle` on
+       first launch. Cache physically lives in the game folder; persistent-
+       path access transparently lands there for both this patched HTTP path
+       AND the unpatched Unity Addressables runtime cache layer.
 
-CRC patches (4 sites) are applied separately by patch_crc3.py and stack
-with these. Run patch_crc3.py first; then this script.
+CRC patches are applied separately by patch_crc.py and stack with these. Run
+patch_crc.py first, then this script.
 """
-import os, shutil, struct, sys, io
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+import sys, shutil
 
-DLL_PATH = r"E:\SteamLibrary\steamapps\common\メルクストーリア - 癒術士と心の旋律 -\GameAssembly.dll"
-BAK_PATH = DLL_PATH + ".bak"
+import mercstoria_config as cfg
+from mercstoria_config import (
+    RVA_STEAM_APP_INIT, RVA_IMPL_INIT, RVA_IMPL_GETLANG, RVA_IMPL_GETROOT,
+    RVA_STUB_GETLANG, RVA_STUB_GETROOT,
+    RVA_YAHH_GET_SKIP, RVA_NCS_GET_SKIP, RVA_CTOR_HTTP2ONLY_CALL,
+    RVA_GETASYNC_5ARG,
+    RVA_INDEXOF_CHAR, RVA_SUBSTRING_1, RVA_SUBSTRING_2,
+    RVA_PATH_COMBINE, RVA_READ_ALL_BYTES, RVA_PERSISTENT_PATH,
+    CDN_PREFIX_LEN,
+)
 
-# -- Steam-side RVAs --
-RVA_STEAM_APP_INIT       = 0x2828740
-RVA_IMPL_INIT            = 0x28283D0
-RVA_IMPL_GETLANG         = 0x28282C0
-RVA_IMPL_GETROOT         = 0x28282D0
-RVA_STUB_GETLANG         = 0x28280C0
-RVA_STUB_GETROOT         = 0x28280F0
-
-# -- Cysharp YAHH (skip cert defense in depth) --
-RVA_YAHH_GET_SKIP        = 0x6BF200
-RVA_NCS_GET_SKIP         = 0x6B1170
-RVA_CTOR_HTTP2ONLY_CALL  = 0x27FA4F4   # site inside AssetBundleHttpClient.ctor
-
-# -- AssetBundleHttpClient.GetAsync (5-arg private) — the pure file-read body --
-RVA_GETASYNC_5ARG        = 0x27FA120
-
-# -- IL2CPP helpers the pure-patch body calls --
-RVA_INDEXOF_CHAR         = 0x245FBE0   # System.String.IndexOf(char)
-RVA_SUBSTRING_1          = 0x2464640   # System.String.Substring(int)
-RVA_SUBSTRING_2          = 0x2464650   # System.String.Substring(int, int)
-RVA_PATH_COMBINE         = 0x25DBE00   # System.IO.Path.Combine(string, string)
-RVA_READ_ALL_BYTES       = 0x25C2BE0   # System.IO.File.ReadAllBytes(string)
-RVA_PERSISTENT_PATH      = 0x3131000   # UnityEngine.Application.get_persistentDataPath()
-
-URL_PREFIX_LEN           = 44          # len("https://assets.mercstoria-memorial.hekk.org/")
+cfg.enable_utf8_stdout()
 
 
 # ============================================================================
@@ -79,6 +57,18 @@ URL_PREFIX_LEN           = 44          # len("https://assets.mercstoria-memorial
 # ============================================================================
 
 class Asm:
+    """Single-pass x64 assembler just expressive enough for the GetAsync body.
+
+    Tracks the load-address (`rva`) so `call_rel32(target_rva)` can compute
+    its rel32 displacement relative to the next instruction. Forward `jmp`
+    and `js` to a `label("name")` are emitted as 2-byte short-jumps with a
+    placeholder displacement and back-patched in `resolve()`.
+
+    The instruction set is intentionally minimal — the patched GetAsync
+    body is the only customer. Anything more involved goes back to
+    hand-rolling raw bytes via `emit()`.
+    """
+
     def __init__(self, start_rva):
         self.rva = start_rva
         self.buf = bytearray()
@@ -86,27 +76,39 @@ class Asm:
         self.short_jumps = []
 
     def here(self):
+        """RVA of the next byte that would be emitted."""
         return self.rva + len(self.buf)
 
     def emit(self, b):
+        """Append raw machine code (anything not covered by the helpers)."""
         self.buf.extend(b)
 
     def label(self, name):
+        """Mark the current position as a jump target for short-jumps."""
         self.labels[name] = len(self.buf)
 
     def jmp_short(self, name):
+        """Emit `jmp rel8` to `name`. The displacement is filled in by resolve()."""
         self.emit(b"\xEB\x00")
         self.short_jumps.append((len(self.buf) - 1, name))
 
     def js_short(self, name):
+        """Emit `js rel8` to `name`. Displacement filled in by resolve()."""
         self.emit(b"\x78\x00")
         self.short_jumps.append((len(self.buf) - 1, name))
 
     def call_rel32(self, target):
+        """Emit `call <rel32>` reaching the absolute RVA `target`."""
         rel = (target - (self.here() + 5)) & 0xFFFFFFFF
         self.emit(b"\xE8" + rel.to_bytes(4, "little"))
 
     def resolve(self):
+        """Patch every short-jump displacement and return the finished buffer.
+
+        Asserts each displacement fits in a signed byte. If you blow that,
+        the answer is to convert the offending jump to a near-jump (5 bytes)
+        rather than relax the assertion.
+        """
         for off, name in self.short_jumps:
             rel = self.labels[name] - (off + 1)
             assert -128 <= rel < 128, f"short jump out of range to {name}: {rel}"
@@ -127,22 +129,11 @@ def build_pure_getasync_body(start_rva):
         byte[] b = File.ReadAllBytes(full);
         return new ValueTask<byte[]>(b);
 
-    NOTE: We use get_persistentDataPath, not get_dataPath or
-    get_streamingAssetsPath, because the latter two icalls hard-crash
-    when called from inside this patched method ("Faulting module: unknown",
-    AV at +0x8) — likely a cold-init issue specific to this IL2CPP build.
-    get_persistentDataPath is hit early by Unity itself during boot, so
+    NOTE: We use get_persistentDataPath, not get_dataPath / get_streamingAssetsPath,
+    because the latter two icalls hard-crash when called from inside this
+    patched method (AV at +0x8) — cold-init issue specific to this IL2CPP
+    build. persistentDataPath is hit early by Unity itself during boot, so
     its icall is hot by the time we reach this code.
-
-    NOTE on path location: cache files PHYSICALLY live in
-    <game>/AssetBundle/StandaloneWindows64/... after Setup.cmd creates an
-    NTFS junction at <persistentDataPath>/AssetBundle -> <game>/AssetBundle.
-    persistentDataPath access then transparently lands in the game folder
-    for BOTH this patched HTTP path AND the unpatched Unity Addressables
-    runtime cache code (which also reads/writes catalog.hash and bundle
-    files at persistentDataPath subpaths). Procmon confirmed the
-    Addressables code path is what crashes the game if cache is moved
-    away from persistentDataPath without the junction in place.
     """
     a = Asm(start_rva)
     a.emit(b"\x53")                              # push rbx
@@ -161,16 +152,16 @@ def build_pure_getasync_body(start_rva):
 
     # q >= 0: pathPart = url.Substring(44, q - 44)
     a.emit(b"\x48\x8B\xCB")                      # mov rcx, rbx
-    a.emit(b"\xBA\x2C\x00\x00\x00")              # mov edx, 44
+    a.emit(bytes([0xBA]) + CDN_PREFIX_LEN.to_bytes(4, "little"))  # mov edx, CDN_PREFIX_LEN
     a.emit(b"\x41\x89\xC0")                      # mov r8d, eax
-    a.emit(b"\x41\x83\xE8\x2C")                  # sub r8d, 44
+    a.emit(bytes([0x41, 0x83, 0xE8, CDN_PREFIX_LEN]))             # sub r8d, CDN_PREFIX_LEN
     a.emit(b"\x4D\x33\xC9")                      # xor r9d, r9d
     a.call_rel32(RVA_SUBSTRING_2)
     a.jmp_short("after_substring")
 
     a.label("no_query")
     a.emit(b"\x48\x8B\xCB")                      # mov rcx, rbx
-    a.emit(b"\xBA\x2C\x00\x00\x00")              # mov edx, 44
+    a.emit(bytes([0xBA]) + CDN_PREFIX_LEN.to_bytes(4, "little"))  # mov edx, CDN_PREFIX_LEN
     a.emit(b"\x45\x33\xC0")                      # xor r8d, r8d
     a.call_rel32(RVA_SUBSTRING_1)
 
@@ -178,12 +169,6 @@ def build_pure_getasync_body(start_rva):
     a.emit(b"\x48\x8B\xD8")                      # mov rbx, rax          ; rbx = pathPart
 
     # baseDir = Application.persistentDataPath
-    #   = <persistentRoot>\jp_co_happyelements\メルストM
-    # On a shipped install, persistentRoot\<...>\AssetBundle is an NTFS
-    # junction pointing at <game install>\AssetBundle (Setup.cmd creates it
-    # on first run). So the bundles physically live in the game folder,
-    # and persistent-path access transparently lands there for both this
-    # patched HTTP path AND the unpatched Addressables cache code path.
     a.emit(b"\x33\xC9")                          # xor ecx, ecx          ; MethodInfo*
     a.call_rel32(RVA_PERSISTENT_PATH)
 
@@ -212,33 +197,17 @@ def build_pure_getasync_body(start_rva):
 
 
 # ============================================================================
-#                            PE helpers and patcher
+#                                Patcher
 # ============================================================================
 
-def parse_pe(dll):
-    pe = struct.unpack_from("<I", dll, 0x3C)[0]
-    ns = struct.unpack_from("<H", dll, pe + 6)[0]
-    so = pe + 0x18 + struct.unpack_from("<H", dll, pe + 0x14)[0]
-    secs = []
-    for i in range(ns):
-        s = so + i * 40
-        secs.append((
-            struct.unpack_from("<I", dll, s + 12)[0],
-            struct.unpack_from("<I", dll, s + 8)[0],
-            struct.unpack_from("<I", dll, s + 20)[0]))
-    return secs
-
-
-def rva_to_off_factory(secs):
-    def f(rva):
-        for va, vs, ro in secs:
-            if va <= rva < va + vs:
-                return ro + (rva - va)
-        raise ValueError(f"RVA 0x{rva:X} not in any section")
-    return f
-
-
 def build_steam_patches():
+    """Return the 4 Steam-bypass byte patches as (name, RVA, old, new) tuples.
+
+    `Initialize` stubs (S1, S2) get a single-byte ret (0xC3) followed by NOPs.
+    `GetLanguage` / `GetUserDataRootPath` (S3, S4) get rewritten to a 5-byte
+    near-jmp into Stub.<same name> — the dev's offline-default implementation
+    that ships in every IL2CPP build.
+    """
     rel_lang = (RVA_STUB_GETLANG - (RVA_IMPL_GETLANG + 5)) & 0xFFFFFFFF
     rel_root = (RVA_STUB_GETROOT - (RVA_IMPL_GETROOT + 5)) & 0xFFFFFFFF
     return [
@@ -262,6 +231,15 @@ def build_steam_patches():
 
 
 def build_skipcert_patches():
+    """Return the 3 Cysharp YAHH cert-skip patches.
+
+    Y1/Y2 force both getter callsites to return `true` (0x0101 — the .NET
+    convention for `Boolean` in `ax` is one byte set to 1). Y3 swaps the
+    HTTP/2-only setter callsite for the SkipCertificateVerification setter,
+    which causes the constructor to flip the cert-skip flag instead of the
+    HTTP/2 flag during initialisation. Strictly defence-in-depth since the
+    pure file-read GetAsync (`P`) never hits the HTTP layer.
+    """
     patch_ax_true = bytes.fromhex("66B80101C3")  # mov ax, 0x0101 ; ret
     return [
         ("Y1: YAHH.get_SkipCertificateVerification -> 0x0101",
@@ -279,10 +257,18 @@ def build_skipcert_patches():
     ]
 
 
-def apply_byte_patches(dll, rva_to_off, patches):
+def apply_byte_patches(dll, sections, patches):
+    """Apply each (name, RVA, old, new) patch in `patches` to `dll` in place.
+
+    Refuses to patch if the bytes at `RVA` don't match either `old` (apply)
+    or `new` (already applied) — a mismatch means the binary has changed
+    (likely a game update) and the RVAs need re-deriving.
+    """
     for name, rva, old, new in patches:
-        foff = rva_to_off(rva)
-        cur = bytes(dll[foff:foff + len(old)])
+        foff = cfg.rva_to_file_offset(rva, sections)
+        if foff is None:
+            raise SystemExit(f"  [ERROR] RVA 0x{rva:X} ({name}) not in any section")
+        cur  = bytes(dll[foff:foff + len(old)])
         head = bytes(dll[foff:foff + len(new)])
         if head == new:
             print(f"  [ALREADY] {name}")
@@ -297,9 +283,10 @@ def apply_byte_patches(dll, rva_to_off, patches):
         print(f"  [APPLIED] {name}")
 
 
-def apply_pure_patch(dll, rva_to_off):
+def apply_pure_patch(dll, sections):
+    """Drop the 136-byte file-read GetAsync body at its RVA. Idempotent."""
     body = build_pure_getasync_body(RVA_GETASYNC_5ARG)
-    foff = rva_to_off(RVA_GETASYNC_5ARG)
+    foff = cfg.rva_to_file_offset(RVA_GETASYNC_5ARG, sections)
     cur = bytes(dll[foff:foff + len(body)])
     if cur == body:
         print(f"  [ALREADY] P: pure 5-arg GetAsync body ({len(body)} bytes)")
@@ -308,31 +295,33 @@ def apply_pure_patch(dll, rva_to_off):
     print(f"  [APPLIED] P: pure 5-arg GetAsync body ({len(body)} bytes)")
 
 
-def main():
-    if not os.path.exists(DLL_PATH):
-        raise SystemExit(f"ERROR: {DLL_PATH} not found")
-    if not os.path.exists(BAK_PATH):
-        shutil.copy2(DLL_PATH, BAK_PATH)
-        print(f"Backed up to {BAK_PATH}")
+def main() -> int:
+    """Apply all 8 patches to the live DLL, leaving a .bak of the pristine
+    binary the first time through. Returns 0 on success."""
+    dll_path = cfg.dll_path()
+    bak_path = cfg.dll_backup_path()
+    if not dll_path.exists():
+        raise SystemExit(f"ERROR: {dll_path} not found")
+    if not bak_path.exists():
+        shutil.copy2(dll_path, bak_path)
+        print(f"Backed up to {bak_path}")
 
-    with open(DLL_PATH, "rb") as f:
-        dll = bytearray(f.read())
-    secs = parse_pe(dll)
-    rva_to_off = rva_to_off_factory(secs)
+    dll = bytearray(dll_path.read_bytes())
+    _, sections = cfg.parse_pe_sections(bytes(dll))
 
     print("Steam bypass (S1-S4):")
-    apply_byte_patches(dll, rva_to_off, build_steam_patches())
+    apply_byte_patches(dll, sections, build_steam_patches())
     print()
     print("Cysharp YAHH cert skip (Y1-Y3, defense in depth):")
-    apply_byte_patches(dll, rva_to_off, build_skipcert_patches())
+    apply_byte_patches(dll, sections, build_skipcert_patches())
     print()
     print("Pure file-read GetAsync (P):")
-    apply_pure_patch(dll, rva_to_off)
+    apply_pure_patch(dll, sections)
 
-    with open(DLL_PATH, "wb") as f:
-        f.write(bytes(dll))
+    dll_path.write_bytes(bytes(dll))
     print(f"\nWrote {len(dll):,} bytes to GameAssembly.dll")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

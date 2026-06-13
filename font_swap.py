@@ -34,37 +34,65 @@ import argparse
 import os
 import shutil
 import sys
-import io
 
 import UnityPy
 from UnityPy.streams import EndianBinaryReader
 
-sys.stdout.reconfigure(encoding="utf-8")
-
-DEFAULT_GAME_DIR = (
-    r"E:\SteamLibrary\steamapps\common\メルクストーリア - 癒術士と心の旋律 -"
+import mercstoria_config as cfg
+from mercstoria_config import (
+    ATLAS_LEN, RESS_ATLAS_OFFSET,
+    BUNDLE_RESS_STD_OFFSET, BUNDLE_RESS_ONE_OFFSET,
+    BUNDLE_FONT_PATHID, BUNDLE_RESS_CAB,
+    RESOURCES_HIDDEN_FONT_PID,
 )
-MIRROR_DIR = r"D:\mercstoria"
+cfg.enable_utf8_stdout()
 
-# Constants discovered from the original game files
-ATLAS_LEN = 16_777_216  # 4096 * 4096 Alpha8
-RESS_ATLAS_OFFSET = 8_690_576  # offset of RocknRollStd Atlas in resources.assets.resS
-BUNDLE_RESS_STD_OFFSET = 65_536  # RocknRollStd slot inside bundle's archive .resS
-BUNDLE_RESS_ONE_OFFSET = 16_842_752  # RocknRollOne slot
-BUNDLE_FONT_PATHID = 6189425675716077201  # bundle's RocknRollStd SDF MonoBehaviour
-BUNDLE_RESS_CAB = "CAB-76c9bdeb5d9d44abf988d53a1128302c.resS"
-RESOURCES_HIDDEN_FONT_PID = 27  # pid of hidden RocknRollStd SDF MonoBehaviour
-BUNDLE_REL_PATH = (
-    r"メルストM_Data\StreamingAssets\aa\StandaloneWindows64"
-    r"\84ece16f121defbfc5b83acb86f5870c.bundle"
-)
-RESOURCES_REL_PATH = r"メルストM_Data\resources.assets"
-RESOURCES_RESS_REL_PATH = r"メルストM_Data\resources.assets.resS"
+# Optional sibling install for ASCII-path test copy.
+MIRROR_DIR = os.environ.get("MERCSTORIA_MIRROR_DIR", r"D:\mercstoria")
+
+
+def _data_folder(game_dir):
+    """Locate the Unity *_Data folder inside `game_dir`.
+
+    Accepts both the pristine name (`メルストM_Data`) and the launcher-
+    deployed renamed-after-exe variant (`メルストM_app_Data`). Unity
+    derives the data-folder name from the exe basename at startup, so
+    deploying the launcher requires the data folder to rename too —
+    this helper papers over the rename for everything downstream.
+    """
+    for name in (cfg.APP_DATA_RENAMED, cfg.APP_DATA_NAME):
+        p = os.path.join(game_dir, name)
+        if os.path.isdir(p):
+            return p
+    raise FileNotFoundError(f"Neither {cfg.APP_DATA_NAME} nor {cfg.APP_DATA_RENAMED} under {game_dir}")
+
+
+def _data_subpath(game_dir, *parts):
+    """Return `<game>/<*_Data>/parts...` as an os.path-joined string."""
+    return os.path.join(_data_folder(game_dir), *parts)
+
+
+def _streaming_assets_subpath(game_dir, *parts):
+    """Return `<game>/<*_Data>/StreamingAssets/aa/StandaloneWindows64/parts...`.
+
+    This is where Unity puts the pre-baked Addressables bundles that
+    ship inside the game install (separate from the CDN cache that's
+    downloaded on first run into LocalLow).
+    """
+    return os.path.join(_data_folder(game_dir),
+                        "StreamingAssets", "aa", "StandaloneWindows64", *parts)
 
 
 # ---------- helpers ----------
 
 def ensure_bak(path):
+    """Create `<path>.bak` if it doesn't already exist. Returns the bak path.
+
+    The bak is the canonical "restore point" the script uses for
+    idempotency: every patch reads source pixels from the bak rather
+    than the live file so re-running gives identical bytes regardless
+    of what state the live file was last left in.
+    """
     bak = path + ".bak"
     if os.path.exists(path) and not os.path.exists(bak):
         shutil.copy2(path, bak)
@@ -144,8 +172,15 @@ TRANSPLANT_KEYS = (
 
 
 def transplant_keys_into(target_tt, source_tt):
-    """Copy glyph-related tables from source to target. PRESERVES m_FaceInfo
-    (including m_LineHeight) so UI layout stays identical to the original."""
+    """Copy glyph-related tables from source to target font asset typetree.
+
+    PRESERVES m_FaceInfo (including m_LineHeight, m_PointSize, ascender,
+    descender) so UI layout stays identical to the original. Replacing
+    m_FaceInfo with the source font's natural values (e.g. LogoSC's
+    m_LineHeight ≈ 39.68 vs the original 64.0) makes every multi-line
+    dialogue / menu box squish together — pixels of overlap, text
+    overflow, the works.
+    """
     for k in TRANSPLANT_KEYS:
         if k in source_tt:
             target_tt[k] = source_tt[k]
@@ -157,7 +192,7 @@ def transplant_keys_into(target_tt, source_tt):
 
 def patch_resources_ress_atlas(game_dir, atlas_bytes):
     """Patch A — overwrite shared atlas pixels in resources.assets.resS."""
-    path = os.path.join(game_dir, RESOURCES_RESS_REL_PATH)
+    path = str(_data_subpath(game_dir, "resources.assets.resS"))
     bak = ensure_bak(path)
     shutil.copy2(bak, path)  # restore first for idempotency
     with open(path, "r+b") as f:
@@ -174,7 +209,7 @@ def patch_bundle(game_dir, source_font_tt, atlas_bytes):
     """Patch B — bundle's font asset + both atlas slots inside its archive resS.
     Returns the patched bundle bytes (in addition to writing to disk) so Patch C
     can byte-diff against the original to find the changed regions."""
-    bundle_path = os.path.join(game_dir, BUNDLE_REL_PATH)
+    bundle_path = str(_streaming_assets_subpath(game_dir, cfg.FONT_BUNDLE_NAME))
     bak = ensure_bak(bundle_path)
     shutil.copy2(bak, bundle_path)
 
@@ -234,7 +269,7 @@ def patch_resources_hidden_font(game_dir, source_font_tt):
     in the structural / glyph-table region (they differ only by 49 bytes of
     m_Script PPtr near the header), so identical diff offsets apply cleanly.
     """
-    bundle_path = os.path.join(game_dir, BUNDLE_REL_PATH)
+    bundle_path = str(_streaming_assets_subpath(game_dir, cfg.FONT_BUNDLE_NAME))
     bundle_bak = bundle_path + ".bak"
     if not os.path.exists(bundle_bak):
         raise SystemExit("[C] bundle .bak missing — run patch B first")
@@ -310,7 +345,7 @@ def patch_resources_hidden_font(game_dir, source_font_tt):
     print(f"[C] glyph-table diff bytes: {len(diffs)}")
 
     # 4. Apply diffs in place on resources.assets pid=27
-    res_path = os.path.join(game_dir, RESOURCES_REL_PATH)
+    res_path = str(_data_subpath(game_dir, "resources.assets"))
     res_bak = ensure_bak(res_path)
     shutil.copy2(res_bak, res_path)  # restore for idempotency
 
@@ -345,8 +380,17 @@ def patch_resources_hidden_font(game_dir, source_font_tt):
 
 
 def mirror_to(src_paths, mirror_dir):
-    """Copy each src into the equivalent relative path under mirror_dir, if that
-    directory exists. Useful for an ASCII-path test install."""
+    """Mirror each patched file into a sibling test install at `mirror_dir`.
+
+    The Steam install lives under a Japanese-character path which sometimes
+    trips ASCII-only tooling. Developers can maintain an ASCII-path copy
+    (e.g. `D:\\mercstoria`) and pass `--mirror-dir` so font-swap patches
+    land in both places at once. Silently no-ops if the mirror dir
+    doesn't exist — passing `--mirror-dir D:\\nope` is safe.
+
+    Mirroring matches paths by their tail under `<exe>_Data` so it works
+    with both pristine and launcher-deployed layouts.
+    """
     if not os.path.isdir(mirror_dir):
         return
     for src in src_paths:
@@ -366,12 +410,20 @@ def mirror_to(src_paths, mirror_dir):
 # ---------- main ----------
 
 def main():
+    """Apply patches A + B + C against the live install (and optional mirror).
+
+    Argument parsing is intentionally permissive: `--game-dir` is auto-
+    resolved through `cfg.game_dir()` if omitted, `--mirror-dir` is opt-in
+    via env override, and `--skip-c` is an escape hatch for users who
+    don't want the in-place resources.assets edit (e.g. while debugging
+    Patch C against a fresh game install).
+    """
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("font_bundle", help="Path to source font bundle (logofont.bundle equivalent)")
     ap.add_argument(
         "--game-dir",
-        default=DEFAULT_GAME_DIR,
-        help=f"Game install dir (default: {DEFAULT_GAME_DIR})",
+        default=None,
+        help="Game install dir (default: auto-detected via mercstoria_config)",
     )
     ap.add_argument(
         "--mirror-dir",
@@ -387,6 +439,8 @@ def main():
 
     if not os.path.isfile(args.font_bundle):
         raise SystemExit(f"font bundle not found: {args.font_bundle}")
+    if args.game_dir is None:
+        args.game_dir = str(cfg.game_dir())
     if not os.path.isdir(args.game_dir):
         raise SystemExit(f"game dir not found: {args.game_dir}")
 
