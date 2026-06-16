@@ -27,7 +27,7 @@ cmake_minimum_required(VERSION 3.20)
 # Note: the path containing Japanese characters at packager time is the LIVE
 # install folder, not the source folder. The project lives wherever you check
 # the repo out — ASCII paths are fine.
-project(mercstoria_launcher LANGUAGES C)
+project(mercstoria_launcher LANGUAGES C RC)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -55,7 +55,7 @@ target_link_libraries(junction PUBLIC kernel32)
 # ----------------------------------------------------------------------------
 # launcher.exe — GUI subsystem, no console flash on double-click
 # ----------------------------------------------------------------------------
-add_executable(launcher WIN32 src/launcher.c)
+add_executable(launcher WIN32 src/launcher.c res/launcher.rc)
 set_target_properties(launcher PROPERTIES
     OUTPUT_NAME "launcher"
     WIN32_EXECUTABLE TRUE

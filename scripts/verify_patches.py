@@ -5,7 +5,11 @@ to confirm the patch set still applies cleanly.
 """
 import sys
 
-import mercstoria_config as cfg
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from mercstoria import config as cfg
 
 cfg.enable_utf8_stdout()
 

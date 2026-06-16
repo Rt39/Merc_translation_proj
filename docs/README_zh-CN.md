@@ -30,31 +30,33 @@
 | 文本格式 | TextAsset → AES-256-CBC → MemoryPack（UTF-8 模式） |
 | 字体格式 | TMP SDF（4096×4096 Alpha8 atlas） |
 
-工具会自动识别游戏安装目录。如需覆盖，运行任何脚本前设置 `MERCSTORIA_GAME_DIR=<路径>`。所有派生路径在 [`../mercstoria_config.py`](../mercstoria_config.py) 中一处定义。
+工具会自动识别游戏安装目录。如需覆盖，运行任何脚本前设置 `MERCSTORIA_GAME_DIR=<路径>`。所有派生路径在 [`../mercstoria/config.py`](../mercstoria/config.py) 中一处定义。
 
 ## 工作流（完整翻译）
 
 ```
    原版游戏安装
-   ────────────────►  patch_crc.py    ──►  GameAssembly.dll（CRC 已修补）
+   ────────────────►  mercstoria patch-crc        ──►  GameAssembly.dll（CRC 已修补）
                           │
                           ▼
-                merc_storia_toolkit.py extract
+                mercstoria extract
                 ──────────────────────────────►  extracted_data/
                                                    story/<id>.json    （4,008 个剧情）
-                                                   misc/<asset>.json
+                                                   misc/<asset>.json  （15 个 master bundle，完整 schema）
                                                    .fingerprints.pkl  （重打包时跳过未改动的文件）
                           │
                   （译者就地修改 value 字段）
                           │
                           ▼
-                merc_storia_toolkit.py repack ──►  repacked_bundles/<bundle>
+                mercstoria repack ───────────────►  repacked_bundles/<bundle>
                           │
                           ▼
-   font_swap.py logofont.bundle ─────────────────►  字体已换，可启动
+   mercstoria font-swap logofont.bundle ─────────►  字体已换，可启动
 ```
 
-若要发布离线版本，再运行 `patch_offline.py`，把 LocalLow 缓存复制到 `<install>/AssetBundle/`，按 [`../launcher/README.md`](../launcher/README.md) 构建并部署 `launcher.exe`，整个文件夹分发即可。最终用户工作流：双击 1 次。
+若要发布离线版本，再运行 `mercstoria patch-offline`，把 LocalLow 缓存复制到 `<install>/AssetBundle/`，按 [`../launcher/README.md`](../launcher/README.md) 构建并部署 `launcher.exe`，整个文件夹分发即可。最终用户工作流：双击 1 次。
+
+> 所有脚本都通过 `mercstoria` 包入口调用：`uv run -m mercstoria <subcmd> [args]`。不带参数运行可看到完整子命令列表。
 
 ## 项目结构
 
@@ -62,44 +64,49 @@
 workshop/
 ├── README.md                   英文版（本文件位于 docs/）
 ├── pyproject.toml              uv/pip 依赖
-├── mercstoria_config.py        中央配置：路径 + RVA + 加密参数
 │
-├── patch_crc.py                CRC 绕过（4 处）
-├── patch_offline.py            Steam 绕过 + 证书跳过 + GetAsync（8 处）
-├── verify_patches.py           两套修补的只读检查
+├── mercstoria/                 Python 包（共享库 + CLI 派发器）
+│   ├── __main__.py             `uv run -m mercstoria <subcmd>` 入口
+│   ├── config.py               中央配置：路径 + RVA + 加密参数
+│   └── memorypack.py           AES 解密 + 完整 MemoryPack Reader/Writer
 │
-├── merc_storia_toolkit.py      统一的 extract / repack CLI
-├── merc_decrypt.py             参考实现：解密 + MemoryPack 解析
-├── translate_1621.py           完整示例：剧情 1621 端到端翻译
-├── deploy_bundles.py           把重打包后的 bundle 推回缓存（自动优先游戏目录 / LocalLow）
-├── bundle_cache.py             把 %LocalLow%/.../AssetBundle 拷到 <game>/AssetBundle（双语提示）
-├── font_swap.py                TMP 字体替换（atlas + bundle + 隐藏字体）
+├── scripts/                    各子命令的 CLI 脚本（由 __main__.py 转发）
+│   ├── patch_crc.py            CRC 绕过（4 处）
+│   ├── patch_offline.py        Steam 绕过 + 证书跳过 + GetAsync（8 处）
+│   ├── verify_patches.py       两套修补的只读检查
+│   ├── extract_repack.py       剧情 + 15 个 master bundle 的 extract / repack
+│   ├── check_roundtrip.py      对前 N 个 story bundle 做 Reader/Writer 一致性检查
+│   ├── deploy.py               把重打包后的 bundle 推回缓存（自动优先游戏目录 / LocalLow）
+│   ├── bundle_cache.py         把 %LocalLow%/.../AssetBundle 拷到 <game>/AssetBundle（双语提示）
+│   ├── font_swap.py            TMP 字体替换（atlas + bundle + 隐藏字体）
+│   └── export_chars.py         为 TMP 字体烘焙生成 target_chars.txt
 │
 ├── docs/
-│   ├── CRC_PATCH_GUIDE.md       （+ _zh-CN 译文）
-│   ├── OFFLINE_MODE_GUIDE.md    （+ _zh-CN）
-│   ├── TEXT_EXTRACTION_GUIDE.md （+ _zh-CN）
-│   ├── FONT_REPLACEMENT_GUIDE.md（+ _zh-CN）
-│   └── README_zh-CN.md          本文件
+│   ├── CRC_PATCH_GUIDE.md            （+ _zh-CN 译文）
+│   ├── OFFLINE_MODE_GUIDE.md         （+ _zh-CN）
+│   ├── TEXT_EXTRACTION_GUIDE.md      （+ _zh-CN）
+│   ├── FONT_REPLACEMENT_GUIDE.md     （+ _zh-CN）
+│   ├── MEMORYPACK_SCHEMA_GUIDE.md    （+ _zh-CN）story bundle wire format
+│   ├── MASTERDATA_SCHEMA_GUIDE_zh-CN.md  全部 15 个 master bundle 的 schema
+│   └── README_zh-CN.md               本文件
 │
-├── launcher/
-│   ├── CMakeLists.txt          MSVC + MinGW 均可
-│   ├── README.md
-│   ├── src/                    launcher.c, junction.c/.h
-│   ├── test/                   test_junction.c
-│   └── cmake/RunJunctionTest.cmake
-│
-└── Setup.cmd                   遗留的一次性 junction 脚本（已被启动器替代）
+└── launcher/
+    ├── CMakeLists.txt          MSVC + MinGW 均可
+    ├── README.md
+    ├── src/                    launcher.c, junction.c/.h
+    ├── test/                   test_junction.c
+    └── cmake/RunJunctionTest.cmake
 ```
 
 第三方组件（gitignore 屏蔽）：`Il2CppDumper/`、`il2cpp_output/`、`tools/`。
 
 ## 运行依赖
 
-所有 Python 依赖（`UnityPy`、`lz4`、`numpy`、`Pillow`、`cryptography`、`capstone`）在 [`../pyproject.toml`](../pyproject.toml) 中声明。运行任何脚本：
+所有 Python 依赖（`UnityPy`、`lz4`、`numpy`、`Pillow`、`cryptography`、`capstone`）在 [`../pyproject.toml`](../pyproject.toml) 中声明。运行子命令：
 
 ```bash
-uv run <script>.py
+uv run -m mercstoria <subcommand> [args]
+uv run -m mercstoria              # 显示完整子命令列表
 ```
 
 启动器需要 CMake ≥ 3.20，以及 MSVC（Visual Studio 2022 Build Tools 或更新）或 MinGW 二选一。构建命令见 [`../launcher/README.md`](../launcher/README.md)。
@@ -121,7 +128,7 @@ uv run <script>.py
 
 - [x] CRC 绕过 —— 4 处修补点，稳定
 - [x] 剧情文本解密 / 提取 —— 4,008 个剧情含元数据
-- [x] MasterData 文本 —— 15 个 bundle，约 29k 条日文字符串
+- [x] MasterData 文本 —— 全部 15 个 master bundle 走完整 MemoryPack schema（字节级 round-trip）
 - [x] 含译文的重打包 —— 端到端往返验证通过
 - [x] 字体替换 —— 中文 SDF 在所有画面上正确渲染
 - [x] 离线启动端到端 —— 8 处修补点；无网无 Steam 即可到达 标题 → 主页 → 剧情章节列表

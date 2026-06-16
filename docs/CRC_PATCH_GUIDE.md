@@ -33,10 +33,10 @@ RVAs **will shift across game patches**. Re-run the dumper and re-grep on a futu
 ## Apply
 
 ```bash
-uv run patch_crc3.py        # idempotent; verifies original bytes before writing
+uv run -m mercstoria patch-crc        # idempotent; verifies original bytes before writing
 ```
 
-`patch_crc3.py`:
+`scripts/patch_crc.py`:
 1. Backs up to `GameAssembly.dll.bak` on first run (if missing).
 2. Reads the live DLL.
 3. Verifies the **original** bytes at each offset match the expected pattern — aborts cleanly with "MISMATCH" if not (guards against game updates).
@@ -60,7 +60,7 @@ A second run is a no-op.
 - Unpatched DLL: bundle silently re-downloaded; original content shown.
 - Patched DLL: corrupted bundle loaded as-is — broken textures or asset-specific crash confirms the bypass works.
 
-Easier in practice: run `font_swap.py`. Without the CRC patch, the font does not change. With it, it does.
+Easier in practice: run `mercstoria font-swap`. Without the CRC patch, the font does not change. With it, it does.
 
 ## What did NOT work
 
@@ -73,8 +73,8 @@ Easier in practice: run `font_swap.py`. Without the CRC patch, the font does not
 
 | Path | Purpose |
 |---|---|
-| `patch_crc.py` | Apply the 4 CRC patches; idempotent |
-| `verify_patches.py` | Read-only check (CRC + offline patches) |
+| `scripts/patch_crc.py` | Apply the 4 CRC patches; idempotent (`mercstoria patch-crc`) |
+| `scripts/verify_patches.py` | Read-only check (CRC + offline patches) (`mercstoria verify-patches`) |
 | `Il2CppDumper/` | Dump symbols (one-time per game build); see [perfare/Il2CppDumper](https://github.com/Perfare/Il2CppDumper) |
 | `il2cpp_output/dump.cs` | Source of truth for RVAs |
 | `GameAssembly.dll.bak` | Auto-created backup before first patch |
@@ -82,7 +82,7 @@ Easier in practice: run `font_swap.py`. Without the CRC patch, the font does not
 ## External references
 
 - [perfare/Il2CppDumper](https://github.com/Perfare/Il2CppDumper) — extracts dump.cs + symbol map from `GameAssembly.dll` + `global-metadata.dat`
-- [Capstone disassembler](https://www.capstone-engine.org/) — used by `patch_crc.py` to verify each patched site
+- [Capstone disassembler](https://www.capstone-engine.org/) — used by `scripts/patch_crc.py` to verify each patched site
 - [Ghidra](https://github.com/NationalSecurityAgency/ghidra) — recommended for x-ref work on the dumped binary
 
 After this guide, modified asset bundles load without complaint. Continue with [`TEXT_EXTRACTION_GUIDE.md`](TEXT_EXTRACTION_GUIDE.md) or [`FONT_REPLACEMENT_GUIDE.md`](FONT_REPLACEMENT_GUIDE.md).

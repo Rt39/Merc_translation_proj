@@ -27,19 +27,23 @@ Patches applied (idempotent — re-running is a no-op):
        Application.persistentDataPath, and return a synchronously-completed
        ValueTask<byte[]> with the file content.
 
-       For shipping standalone: the launcher (or Setup.cmd fallback) creates
-       an NTFS junction `<persistent>/AssetBundle` -> `<game>/AssetBundle` on
-       first launch. Cache physically lives in the game folder; persistent-
-       path access transparently lands there for both this patched HTTP path
-       AND the unpatched Unity Addressables runtime cache layer.
+       For shipping standalone: the launcher creates an NTFS junction
+       `<persistent>/AssetBundle` -> `<game>/AssetBundle` on first launch.
+       Cache physically lives in the game folder; persistent-path access
+       transparently lands there for both this patched HTTP path AND the
+       unpatched Unity Addressables runtime cache layer.
 
 CRC patches are applied separately by patch_crc.py and stack with these. Run
 patch_crc.py first, then this script.
 """
 import sys, shutil
 
-import mercstoria_config as cfg
-from mercstoria_config import (
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from mercstoria import config as cfg
+from mercstoria.config import (
     RVA_STEAM_APP_INIT, RVA_IMPL_INIT, RVA_IMPL_GETLANG, RVA_IMPL_GETROOT,
     RVA_STUB_GETLANG, RVA_STUB_GETROOT,
     RVA_YAHH_GET_SKIP, RVA_NCS_GET_SKIP, RVA_CTOR_HTTP2ONLY_CALL,

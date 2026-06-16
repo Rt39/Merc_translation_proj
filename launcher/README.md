@@ -1,7 +1,10 @@
 # Merc Storia Launcher
 
-Self-contained Windows launcher that replaces the per-machine `Setup.cmd` step.
-On double-click it creates an NTFS mount-point junction from
+中文版：[`README_zh-CN.md`](README_zh-CN.md)
+
+Self-contained Windows launcher that replaces what used to be a manual
+`mklink /J` setup step. On double-click it creates an NTFS mount-point
+junction from
 `%LocalLow%/jp_co_happyelements/メルストM/AssetBundle` to the bundled
 `<install>/AssetBundle/`, then starts `メルストM_app.exe`. Idempotent — second
 run sees the junction and just launches.

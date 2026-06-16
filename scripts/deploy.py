@@ -31,13 +31,18 @@ import shutil
 import sys
 from pathlib import Path
 
-import mercstoria_config as cfg
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from mercstoria import config as cfg
 
 cfg.enable_utf8_stdout()
 
 
-# Output of `merc_storia_toolkit.py repack` — always next to this script.
-_HERE = Path(__file__).resolve().parent
+# Output of `extract_repack.py repack` — always at the repo root, not next
+# to this script (which now lives in scripts/).
+_HERE = Path(__file__).resolve().parent.parent
 REPACKED_STORY = _HERE / "repacked_bundles" / "story"
 REPACKED_MISC  = _HERE / "repacked_bundles" / "misc"
 

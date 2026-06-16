@@ -3,6 +3,10 @@
 End-to-end pipeline for extracting, translating, and repacking every piece of
 translatable Japanese text in the game (story dialogue + master data).
 
+Story path uses a full MemoryPack schema (see merc_decrypt.py) — JSON ↔ bytes
+is byte-identical for 4008/4013 vanilla bundles, so translators can insert
+or remove scenes, not just edit existing ones.
+
 Usage
 -----
     uv run merc_storia_toolkit.py extract
@@ -10,9 +14,10 @@ Usage
         `extract-story` then `extract-misc`.
 
     uv run merc_storia_toolkit.py extract-story
-        Stories only → extracted_data/story/<story_id>.json (one file per story),
-        with title / episode / chapter_name / display_order at the head of each
-        file so the translator has context immediately.
+        Stories only → extracted_data/story/<story_id>.json. The JSON mirrors
+        StoryYamlData verbatim (every field from dump.cs, including _mc and
+        _skipped markers used to round-trip exactly). Translators edit
+        scenes[*].Text / .Speakers / character DisplayName fields in place.
 
     uv run merc_storia_toolkit.py extract-misc
         MasterData bundles with JP text → extracted_data/misc/<AssetName>.json.
@@ -31,12 +36,12 @@ Usage
 
 Translation workflow
 --------------------
-Translators edit the JSON files **in place** — replace the original Japanese
-strings with translations in `scenes[*].speakers` / `scenes[*].text` (stories)
-or `strings[*].value` (misc). The repacker walks each bundle, finds every
-string slot at its original offset, and substitutes the value from the JSON.
-Anything the translator left unchanged is preserved byte-for-byte. No separate
-"translations" dict needed.
+Translators edit the JSON files **in place**. For stories the JSON has the
+full StoryYamlData schema — only edit user-visible string fields (Text,
+Speakers, DisplayName) and leave _mc / _skipped / _null / _bits keys alone.
+For misc bundles the JSON lists every MemoryPack string by byte offset;
+edit `strings[i].value`. Anything the translator left unchanged is preserved
+byte-for-byte.
 
 Modification tracking
 ---------------------
@@ -62,7 +67,11 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding as sym_padding
 import UnityPy
 
-import mercstoria_config as cfg
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from mercstoria import config as cfg
 cfg.enable_utf8_stdout()
 
 # === Crypto ===
@@ -224,105 +233,13 @@ def repack_bundle(original_path: str, output_path: str, mutate_plaintext):
 
 
 # === Story dialogue ===
+#
+# Story extract/repack uses the full MemoryPack schema from merc_decrypt.py
+# (Reader/Writer round-trip is byte-identical on 4008/4013 vanilla bundles).
+# That gives translators the freedom to insert or delete scenes, not just
+# edit existing strings. The old "splice on byte offsets" path is gone.
 
-def extract_dialogue(data: bytes):
-    """Parse StoryYamlData -> {story_id, scene_count, scenes:[{scene_id, speakers, text}]}."""
-    pos = 0
-    if not data or data[pos] != 2:
-        return None
-    pos += 1
-    story_id = struct.unpack_from('<i', data, pos)[0]; pos += 4
-    dict_count = struct.unpack_from('<i', data, pos)[0]; pos += 4
-    if dict_count < 0 or dict_count > 10000:
-        return None
-
-    scenes = []
-    i = 9
-    while i < len(data) - 5:
-        key = struct.unpack_from('<i', data, i)[0]
-        scene_tag = data[i + 4]
-        if scene_tag == 21 and 0 <= key < 10000:
-            sp = i + 5
-            scene_id = struct.unpack_from('<i', data, sp)[0]; sp += 4
-            sc_cnt = struct.unpack_from('<i', data, sp)[0]; sp += 4
-            if 0 <= sc_cnt <= 10:
-                speakers = []
-                ok = True
-                cur = sp
-                for _ in range(sc_cnt):
-                    s, cur = read_string(data, cur)
-                    speakers.append(s)
-                if ok:
-                    text, _ = read_string(data, cur)
-                    scenes.append({
-                        "scene_id": scene_id,
-                        "speakers": speakers,
-                        "text": text,
-                    })
-            i += 5
-            continue
-        i += 1
-    return {"story_id": story_id, "scene_count": dict_count, "scenes": scenes}
-
-
-def find_story_strings(data: bytes):
-    """Walk StoryYamlData and yield (start, end, value, kind, scene_id, idx) for
-    every (Speaker, Text) slot. Empty/null slots are skipped — they have nothing
-    to replace and the walk's anchor logic doesn't need them."""
-    out = []
-    i = 9
-    while i < len(data) - 5:
-        key = struct.unpack_from('<i', data, i)[0]
-        scene_tag = data[i + 4]
-        if scene_tag == 21 and 0 <= key < 10000:
-            sp = i + 5
-            scene_id = struct.unpack_from('<i', data, sp)[0]; sp += 4
-            speakers_count = struct.unpack_from('<i', data, sp)[0]; sp += 4
-            if 0 <= speakers_count <= 10:
-                valid = True
-                for j in range(speakers_count):
-                    s_start = sp
-                    s, sp = read_string(data, s_start)
-                    if s is not None and s != "":
-                        out.append((s_start, sp, s, "speaker", scene_id, j))
-                    elif s is None and sp == s_start:
-                        valid = False
-                        break
-                if valid:
-                    t_start = sp
-                    text, sp = read_string(data, t_start)
-                    if text is not None and text != "":
-                        out.append((t_start, sp, text, "text", scene_id, 0))
-            i += 5
-            continue
-        i += 1
-    return out
-
-
-def apply_story_json(data: bytes, story: dict) -> bytes:
-    """Replace each (Speaker, Text) slot whose JSON value differs from the
-    original. Bundle bytes outside string slots are preserved verbatim."""
-    lookup = {}
-    for sc in story.get("scenes", []):
-        sid = sc.get("scene_id")
-        for i, sp in enumerate(sc.get("speakers", [])):
-            lookup[(sid, "speaker", i)] = sp
-        lookup[(sid, "text", 0)] = sc.get("text")
-
-    offsets = find_story_strings(data)
-    if not offsets:
-        return data
-
-    out = bytearray()
-    prev = 0
-    for start, end, original, kind, sid, idx in offsets:
-        new_value = lookup.get((sid, kind, idx), original)
-        if new_value != original:
-            out.extend(data[prev:start])
-            out.extend(write_string(new_value))
-            prev = end
-    out.extend(data[prev:])
-    return bytes(out)
+from mercstoria import memorypack as _md
 
 
 # === Generic MemoryPack string scan (MasterData) ===
@@ -463,7 +380,7 @@ def parse_chapter_master(bundle_path: str):
 STORY_DIR  = str(cfg.story_masterdata_dir())
 MASTER_DIR = str(cfg.masterdata_dir())
 
-OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_DIR = str(Path(__file__).resolve().parent.parent)
 
 EXTRACT_ROOT = os.path.join(OUTPUT_DIR, "extracted_data")
 STORY_OUT = os.path.join(EXTRACT_ROOT, "story")
@@ -493,6 +410,44 @@ MISC_BUNDLES = {
     "e4d718566461853b73497ce861cbeb76.bundle": "BackgroundMasterData",
     "e79dbe20ad92ab8b77c2738a33353c6d.bundle": "BackgroundMusicMasterData",
     "fc1bc9134e3211e77ec9b57808b84cd8.bundle": "GuildTournamentMasterData",
+}
+
+# Full-schema MasterData bundles — JSON has structured records and translators
+# can change string lengths freely (the offset-based path requires the new
+# encoded bytes to be the same length as the original). The other entries in
+# MISC_BUNDLES still go through the offset-based string-replace path.
+# Map: bundle filename → (asset_name, reader_method, serializer_fn).
+FULL_SCHEMA_MASTER = {
+    "357536dd738af9be5b6f3e5b60d3cc89.bundle":
+        ("ChapterMasterData", "chapter_master", _md.serialize_chapter_master),
+    "d5f5fd6024911c22fa99b59427270214.bundle":
+        ("StoryMasterData",   "story_master",   _md.serialize_story_master),
+    "361e6b4412879287d31c75df82baa481.bundle":
+        ("UnitMasterData",    "unit_master",    _md.serialize_unit_master),
+    "e4d718566461853b73497ce861cbeb76.bundle":
+        ("BackgroundMasterData", "background_master", _md.serialize_background_master),
+    "e79dbe20ad92ab8b77c2738a33353c6d.bundle":
+        ("BackgroundMusicMasterData", "background_music_master", _md.serialize_background_music_master),
+    "89b2fa703971c113719ac402372357d6.bundle":
+        ("GuildMapConditionMasterData", "guild_map_condition_master", _md.serialize_guild_map_condition_master),
+    "fc1bc9134e3211e77ec9b57808b84cd8.bundle":
+        ("GuildTournamentMasterData", "guild_tournament_master", _md.serialize_guild_tournament_master),
+    "9b540a617789744fadadf9265d05d2aa.bundle":
+        ("LeaderStyleMasterData", "leader_style_master", _md.serialize_leader_style_master),
+    "66fb180f1c0d2c8e7b5fc08d5f1d3822.bundle":
+        ("LoadingComicMasterData", "loading_comic_master", _md.serialize_loading_comic_master),
+    "3cb553ddf329cfa9ad0373e6f9843b13.bundle":
+        ("MainCharacterStyleMasterData", "main_character_style_master", _md.serialize_main_character_style_master),
+    "200a6b75588cb6f880a05c085cdfa139.bundle":
+        ("MemorialQuestMasterData", "memorial_quest_master", _md.serialize_memorial_quest_master),
+    "15dfc167a270133340e8dea7eca1f8bc.bundle":
+        ("MonsterMasterData", "monster_master", _md.serialize_monster_master),
+    "2aa2ac58c76235a153adfd6824be18d8.bundle":
+        ("SquareBackgroundMasterData", "square_background_master", _md.serialize_square_background_master),
+    "3baee6fe788b15ee5e1e855dc4a76226.bundle":
+        ("StampMasterData", "stamp_master", _md.serialize_stamp_master),
+    "1a1f221889c7113c4fc81d5269cd2c8f.bundle":
+        ("UnitSkillEffectMasterData", "unit_skill_effect_master", _md.serialize_unit_skill_effect_master),
 }
 
 
@@ -570,14 +525,19 @@ def write_json_with_fingerprint(path: str, payload: dict, fps: dict, key: str):
 
 def cmd_extract_story():
     """`extract-story` command: extract every story bundle to
-    extracted_data/story/<story_id>.json.
+    extracted_data/story/<story_id>.json with the full MemoryPack schema.
 
-    Each output file has the metadata (title, episode, chapter name,
-    display order, etc.) at the top followed by `scenes[]`. The
-    StoryMasterData + ChapterMasterData bundles are parsed first so we
-    can join story-id → title/episode. If those bundles can't be
-    decoded (e.g. game updated and the layout changed), extraction
-    continues with empty metadata rather than failing.
+    Each output file has translator-facing metadata (title, episode, chapter
+    name, display_order) at the top, followed by the raw StoryYamlData
+    structure: list of (key, scene_dict) pairs that mirror dump.cs field-for-
+    field. The Reader keeps internal markers (`_mc`, `_skipped`, `_null`/
+    `_bits`) so Writer can reproduce the exact bytes — translators should
+    leave those alone and edit only the user-visible string fields (Text,
+    Speakers, Left/Center/Right.DisplayName).
+
+    Bundles whose plaintext doesn't round-trip byte-identical are skipped
+    and listed in `_errors.json`. That guarantees: if a story.json appears
+    in the output, repacking it without changes is provably lossless.
     """
     os.makedirs(STORY_OUT, exist_ok=True)
     fps = load_fingerprints()
@@ -611,14 +571,23 @@ def cmd_extract_story():
                 errors.append({"file": fname, "error": "no TextAsset"})
                 continue
             pt = decrypt(enc)
-            parsed = extract_dialogue(pt)
-            if parsed is None:
-                errors.append({"file": fname, "error": "parse failed"})
+            story = _md.Reader(pt).story()
+            if story is None:
+                errors.append({"file": fname, "error": "parse returned null"})
                 continue
-            sid = parsed["story_id"]
-            meta = meta_by_id.get(sid, {})
+            # Reproduce-or-skip: if Writer can't recreate the exact plaintext
+            # from our parsed dict, the JSON is poisoned and repack would
+            # silently corrupt the bundle. Skip and log.
+            rt = _md.serialize_story(story)
+            if rt != pt:
+                k = 0; m = min(len(rt), len(pt))
+                while k < m and rt[k] == pt[k]: k += 1
+                errors.append({"file": fname,
+                               "error": f"round-trip diverges @ {k}/{len(pt)}"})
+                continue
 
-            # Metadata first, scenes last — translator sees context up-front.
+            sid = story["Id"]
+            meta = meta_by_id.get(sid, {})
             payload = {
                 "story_id": sid,
                 "title": meta.get("title"),
@@ -628,13 +597,21 @@ def cmd_extract_story():
                 "display_order": meta.get("display_order"),
                 "bundle": fname,
                 "asset_name": name,
-                "scene_count": parsed["scene_count"],
-                "scenes": parsed["scenes"],
+                "_mc": story["_mc"],
+                "Scenes": [
+                    {"key": k, "scene": sc}
+                    for k, sc in story["Scenes"]
+                ],
             }
+            # Some bundles share story_id=0 (placeholder/template stories).
+            # Disambiguate by appending the bundle stem so each bundle gets
+            # its own JSON file and repack maps 1:1 back to the source.
+            stem = os.path.splitext(fname)[0]
+            json_name = f"{sid}.json" if sid != 0 else f"{sid}_{stem}.json"
             index[fname] = sid
-            key = f"story/{sid}.json"
+            key = f"story/{json_name}"
             write_json_with_fingerprint(
-                os.path.join(STORY_OUT, f"{sid}.json"), payload, fps, key)
+                os.path.join(STORY_OUT, json_name), payload, fps, key)
             written += 1
         except Exception as e:
             errors.append({"file": fname, "error": str(e)})
@@ -651,14 +628,22 @@ def cmd_extract_misc():
     """`extract-misc` command: extract every MasterData bundle that holds JP
     text to extracted_data/misc/<AssetName>.json.
 
-    The bundle whitelist (MISC_BUNDLES) is hardcoded — adding a new one is a
-    one-line edit. Each output file records every MemoryPack string with its
-    byte offset so the repack step can match exactly without re-walking.
+    Two paths:
+      * full-schema bundles (FULL_SCHEMA_MASTER) — records are parsed via the
+        merc_decrypt Reader. JSON has structured records that translators can
+        edit freely (string lengths can change). Reader is verified by
+        round-tripping the original plaintext byte-identical before writing
+        the JSON; mismatches are logged and the file is skipped.
+      * offset-based bundles — every MemoryPack string is dumped with its byte
+        offset. Translators edit `strings[i].value` IN PLACE; the new encoded
+        string must be the same byte length as the original (length is
+        preserved by the splice).
     """
     os.makedirs(MISC_OUT, exist_ok=True)
     fps = load_fingerprints()
 
     written = 0
+    errors = []
     for fname, asset_name in MISC_BUNDLES.items():
         fpath = os.path.join(MASTER_DIR, fname)
         if not os.path.exists(fpath):
@@ -671,13 +656,46 @@ def cmd_extract_misc():
             print(f"  ERROR {fname}: {e}")
             continue
 
+        full = FULL_SCHEMA_MASTER.get(fname)
+        if full:
+            _, reader_method, serializer = full
+            try:
+                obj = getattr(_md.Reader(pt), reader_method)()
+                rt = serializer(obj)
+                if rt != pt:
+                    k = 0; m = min(len(rt), len(pt))
+                    while k < m and rt[k] == pt[k]: k += 1
+                    errors.append({"file": fname,
+                                   "error": f"round-trip diverges @ {k}/{len(pt)}"})
+                    print(f"  ERROR {asset_name}: round-trip diverged at byte {k}")
+                    continue
+            except Exception as e:
+                errors.append({"file": fname, "error": str(e)})
+                print(f"  ERROR {asset_name}: {e}")
+                continue
+            payload = {
+                "asset": asset_name,
+                "bundle": fname,
+                "asset_name_in_bundle": name,
+                "schema": "full",
+                "_mc": obj["_mc"],
+                "Records": obj["Records"],
+            }
+            key = f"misc/{asset_name}.json"
+            write_json_with_fingerprint(
+                os.path.join(MISC_OUT, f"{asset_name}.json"), payload, fps, key)
+            written += 1
+            n_rec = len(obj["Records"]) if obj["Records"] is not None else 0
+            print(f"  {asset_name:32s}  records={n_rec:5d}  (full schema)")
+            continue
+
         items = find_all_strings(pt)
         jp_count = sum(1 for _o, _l, s in items if has_jp(s))
-
         payload = {
             "asset": asset_name,
             "bundle": fname,
             "asset_name_in_bundle": name,
+            "schema": "offset",
             "total_strings": len(items),
             "jp_strings": jp_count,
             "strings": [
@@ -691,8 +709,11 @@ def cmd_extract_misc():
         written += 1
         print(f"  {asset_name:32s}  total={len(items):5d}  jp={jp_count:5d}")
 
+    if errors:
+        with open(os.path.join(MISC_OUT, "_errors.json"), 'w', encoding='utf-8') as f:
+            json.dump(errors, f, ensure_ascii=False, indent=2)
     save_fingerprints(fps)
-    print(f"\nWrote {written} misc bundles to {MISC_OUT}")
+    print(f"\nWrote {written} misc bundles to {MISC_OUT}. Errors: {len(errors)}.")
 
 
 def cmd_extract():
@@ -719,14 +740,32 @@ def _is_modified(path: str, key: str, fps: dict, force: bool) -> bool:
     return sha256_file(path) != baseline
 
 
+def _story_dict_from_json(payload: dict) -> dict:
+    """Reconstruct the merc_decrypt-shape story dict from a JSON payload.
+
+    The JSON wraps `Scenes` as a list of `{key, scene}` for human readability;
+    Writer wants `[(key, scene_dict), ...]`. Strip the metadata header here
+    so anything outside the schema is ignored.
+    """
+    return {
+        "_mc": payload["_mc"],
+        "Id": payload["story_id"],
+        "Scenes": [(s["key"], s["scene"]) for s in payload["Scenes"]],
+    }
+
+
 def cmd_repack_story(force: bool = False):
     """`repack-story` command: rebuild every modified story JSON into a
     UnityFS bundle under repacked_bundles/story/<bundle>.
 
-    "Modified" is decided by `_is_modified` (fingerprint mismatch). The
-    rename / move semantics of repack_bundle keep the original bundle
-    name so deploy_bundles.py can drop the new bundle straight onto
-    the live cache copy.
+    Uses the full MemoryPack schema (merc_decrypt.Writer). Translators can
+    add or remove `Scenes[]` entries; the Writer regenerates the bundle's
+    plaintext from scratch and the AES-encrypted TextAsset is rebuilt
+    around the new length. CRC patches must be in place or the modified
+    bundle gets rejected by Unity at load time.
+
+    "Modified" is decided by `_is_modified` (fingerprint mismatch). Bundle
+    name is preserved so deploy_bundles.py can drop it onto the live cache.
     """
     if not os.path.isdir(STORY_OUT):
         print(f"ERROR: {STORY_OUT} does not exist; run `extract-story` first.")
@@ -747,15 +786,17 @@ def cmd_repack_story(force: bool = False):
             skipped += 1
             continue
         with open(fpath, 'rb') as f:
-            story = json.loads(f.read().decode('utf-8'))
-        bundle = story.get("bundle")
+            payload = json.loads(f.read().decode('utf-8'))
+        bundle = payload.get("bundle")
         if not bundle:
             failed += 1
             continue
         src = os.path.join(STORY_DIR, bundle)
         dst = os.path.join(REPACK_STORY, bundle)
         try:
-            repack_bundle(src, dst, lambda pt, _s=story: apply_story_json(pt, _s))
+            story_dict = _story_dict_from_json(payload)
+            new_pt = _md.serialize_story(story_dict)
+            repack_bundle(src, dst, lambda _orig, _b=new_pt: _b)
             repacked += 1
         except Exception as e:
             print(f"  ERROR {bundle}: {e}")
@@ -771,6 +812,11 @@ def cmd_repack_story(force: bool = False):
 def cmd_repack_misc(force: bool = False):
     """`repack-misc` command: same idea as `repack-story` but for MasterData.
 
+    Two paths, dispatched on the JSON's `schema` field:
+      * `"full"`   — Records[] is fed back through merc_decrypt.serialize_*.
+      * `"offset"` — splice strings by byte offset; new bytes must match the
+                     original encoded length.
+
     Output bundles land in repacked_bundles/misc/<bundle>. Each bundle's
     asset name is printed alongside so a translator scanning the output
     can immediately tell whether the right MasterData asset was touched.
@@ -785,7 +831,7 @@ def cmd_repack_misc(force: bool = False):
     skipped = 0
     failed = 0
     for fname in sorted(os.listdir(MISC_OUT)):
-        if not fname.endswith(".json"):
+        if not fname.endswith(".json") or fname.startswith("_"):
             continue
         fpath = os.path.join(MISC_OUT, fname)
         key = f"misc/{fname}"
@@ -801,7 +847,14 @@ def cmd_repack_misc(force: bool = False):
         src = os.path.join(MASTER_DIR, bundle)
         dst = os.path.join(REPACK_MISC, bundle)
         try:
-            repack_bundle(src, dst, lambda pt, _d=doc: apply_misc_json(pt, _d))
+            full = FULL_SCHEMA_MASTER.get(bundle)
+            if full and doc.get("schema") == "full":
+                _, _, serializer = full
+                obj = {"_mc": doc["_mc"], "Records": doc["Records"]}
+                new_pt = serializer(obj)
+                repack_bundle(src, dst, lambda _orig, _b=new_pt: _b)
+            else:
+                repack_bundle(src, dst, lambda pt, _d=doc: apply_misc_json(pt, _d))
             repacked += 1
             print(f"  {doc.get('asset', bundle)} -> {dst}")
         except Exception as e:
@@ -820,19 +873,20 @@ def cmd_repack(force: bool = False):
 
 
 def cmd_test_repack():
-    """Round-trip a single bundle: take its first text line, swap it for a
-    sentinel via apply_story_json, re-decrypt, confirm the sentinel survived."""
+    """Round-trip a single bundle through the full-schema pipeline:
+    parse with Reader, mutate the first non-empty Text via the dict, write
+    it back through Writer + repack_bundle, then re-read and confirm the
+    sentinel survives."""
     test_bundle = os.path.join(STORY_DIR, "eb777f2829400cfced05a3761d77fd6a.bundle")
     _, enc = extract_textasset_raw(test_bundle)
     pt = decrypt(enc)
-    parsed = extract_dialogue(pt)
+    story = _md.Reader(pt).story()
     sentinel = "[TOOLKIT_ROUNDTRIP_OK]"
 
-    # Find the first scene with a non-empty text line and swap it.
     swapped = False
-    for sc in parsed["scenes"]:
-        if sc.get("text"):
-            sc["text"] = sentinel
+    for _key, sc in story["Scenes"]:
+        if sc and sc.get("Text"):
+            sc["Text"] = sentinel
             swapped = True
             break
     if not swapped:
@@ -840,19 +894,22 @@ def cmd_test_repack():
         return
 
     out = os.path.join(OUTPUT_DIR, "test_repacked.bundle")
-    repack_bundle(test_bundle, out, lambda pt2, _s=parsed: apply_story_json(pt2, _s))
+    new_pt = _md.serialize_story(story)
+    repack_bundle(test_bundle, out, lambda _orig, _b=new_pt: _b)
 
     _, enc2 = extract_textasset_raw(out)
     pt2 = decrypt(enc2)
-    result = extract_dialogue(pt2)
-    ok = result and sentinel.encode() in pt2 and any(
-        sc.get("text") == sentinel for sc in result["scenes"]
+    result = _md.Reader(pt2).story()
+    ok = result and any(
+        sc and sc.get("Text") == sentinel
+        for _k, sc in result["Scenes"]
     )
     print("Test repack:", "SUCCESS" if ok else "FAILED")
     if ok:
-        for sc in result["scenes"]:
-            if sc.get("text") == sentinel:
-                sp = ', '.join(s for s in sc["speakers"] if s) or '(narrator)'
+        for _key, sc in result["Scenes"]:
+            if sc and sc.get("Text") == sentinel:
+                speakers = sc.get("Speakers") or []
+                sp = ', '.join(s for s in speakers if s) or '(narrator)'
                 print(f"  [{sp}] {sentinel}")
                 break
 

@@ -1,0 +1,10 @@
+// launcher.rc — embeds the original game icon so Explorer / the taskbar show the
+// same artwork as メルストM_app.exe. ID 1 makes this the default application icon.
+//
+// res/app.ico was extracted from メルストM_app.exe and contains all 9 sizes
+// (16, 20, 24, 32, 40, 48, 64, 128, 256). See launcher/README.md for the
+// extraction recipe in case the icon ever changes.
+
+#include <windows.h>
+
+1 ICON "app.ico"

@@ -1,6 +1,6 @@
 # Merc Storia — Offline-Mode Patch Guide
 
-How `patch_offline.py` makes the game launch and play with the Steam Client closed and the network disconnected. Stacks on top of [`CRC_PATCH_GUIDE.md`](CRC_PATCH_GUIDE.md) — run `patch_crc.py` first.
+How `scripts/patch_offline.py` (CLI: `mercstoria patch-offline`) makes the game launch and play with the Steam Client closed and the network disconnected. Stacks on top of [`CRC_PATCH_GUIDE.md`](CRC_PATCH_GUIDE.md) — run `mercstoria patch-crc` first.
 
 Game environment: see [`README.md`](../README.md#game-environment-canonical).
 
@@ -71,7 +71,7 @@ public ValueTask<byte[]> GetAsync(string url, int retryCount, int maxRetry,
 - `persistentDataPath` → `%LOCALAPPDATA%/../LocalLow/jp_co_happyelements/メルストM`.
 - The synchronously-completed `ValueTask<byte[]>` is built directly in the caller-allocated 24-byte return slot: `_obj=null`, `_result=bytes`, rest zero.
 
-136 bytes of x64. All IL2CPP helper RVAs (`String.IndexOf`, `Substring`, `get_persistentDataPath`, `Path.Combine`, `File.ReadAllBytes`) are listed at the top of `patch_offline.py`.
+136 bytes of x64. All IL2CPP helper RVAs (`String.IndexOf`, `Substring`, `get_persistentDataPath`, `Path.Combine`, `File.ReadAllBytes`) are listed at the top of `scripts/patch_offline.py`.
 
 ### Three traps worth remembering
 
@@ -88,12 +88,12 @@ public ValueTask<byte[]> GetAsync(string url, int retryCount, int maxRetry,
 ## Apply
 
 ```bash
-uv run patch_crc3.py
-uv run patch_offline.py
-uv run verify_offline_patch.py
+uv run -m mercstoria patch-crc
+uv run -m mercstoria patch-offline
+uv run -m mercstoria verify-patches
 ```
 
-`patch_offline.py` is idempotent and self-verifying: backs up to `.bak` on first run, verifies original bytes at every site before writing, aborts cleanly on "MISMATCH" if a game update has shifted RVAs.
+`scripts/patch_offline.py` is idempotent and self-verifying: backs up to `.bak` on first run, verifies original bytes at every site before writing, aborts cleanly on "MISMATCH" if a game update has shifted RVAs.
 
 ## Shipping a self-contained install
 
@@ -101,28 +101,30 @@ Goal: copy the install folder to another machine, run one setup script, double-c
 
 For that the 15 GB cache must **physically live inside the game folder**. The patches above only redirect the CDN HTTP path. **Unity's Addressables runtime ALSO reads/writes its own cache directly under `persistentDataPath`** (catalog.hash, downloaded bundles, integrity checks) via code paths deep inside Addressables / ResourceManager — not through `AssetBundleHttpClient.GetAsync`. Patching every one of those call sites is brittle and unbounded.
 
-So we redirect at the filesystem layer: `Setup.cmd` (lives next to the exe) creates a one-line NTFS junction:
+So we redirect at the filesystem layer: the bundled launcher
+(`launcher/build/Release/launcher.exe`, drop-in replacement for
+`メルストM.exe`) creates an NTFS junction on first run, equivalent to:
 
 ```
-mklink /J "%USERPROFILE%\AppData\LocalLow\jp_co_happyelements\メルストM\AssetBundle" "%~dp0AssetBundle"
+mklink /J "%USERPROFILE%\AppData\LocalLow\jp_co_happyelements\メルストM\AssetBundle" "<install>\AssetBundle"
 ```
 
-After that, `persistentDataPath\AssetBundle` is a reparse point pointing at the bundled `<install>\AssetBundle\`. Both the patched HTTP code AND Unity's Addressables runtime land on the bundled cache — neither knows or cares the path traverses a junction. Re-running Setup.cmd is a safe no-op.
+After that, `persistentDataPath\AssetBundle` is a reparse point pointing at the bundled `<install>\AssetBundle\`. Both the patched HTTP code AND Unity's Addressables runtime land on the bundled cache — neither knows or cares the path traverses a junction. The launcher is idempotent: subsequent launches notice the junction already exists and skip straight to spawning the renamed `メルストM_app.exe`.
 
 Distribution layout:
 
 ```
 <install>/
-  メルストM.exe
+  メルストM.exe             (the launcher, drop-in replacement)
+  メルストM_app.exe         (original Unity player, renamed by deploy)
+  メルストM_app_Data/
   GameAssembly.dll          (patched)
-  メルストM_Data/
   AssetBundle/              (the bundled 15 GB cache)
     StandaloneWindows64/<Category>/...
-  Setup.cmd
   ...
 ```
 
-User workflow: copy folder anywhere → double-click `Setup.cmd` once → double-click `メルストM.exe`.
+User workflow: copy folder anywhere → double-click `メルストM.exe`.
 
 **Diagnostic that motivates the junction.** Without it, procmon trace shows:
 
@@ -132,19 +134,18 @@ T+14s   Unrelated code path: CreateFile <persistent>\AssetBundle\StandaloneWindo
 T+14s   Thread Exit cascade across ~80 threads; process terminates cleanly
 ```
 
-The second call goes through `UnityEngine.AddressableAssets` / `ResourceManager` internals — resolves the cache path from `persistentDataPath` without touching our patch site. Junction makes that path mean "the game folder".
+The second call goes through `UnityEngine.AddressableAssets` / `ResourceManager` internals — resolves the cache path from `persistentDataPath` without touching our patch site. The launcher-created junction makes that path mean "the game folder".
 
-(See [`STATE.md`](STATE.md) for a deeper analysis of why patching Addressables runtime to eliminate Setup.cmd is not worth the effort.)
+(See [`STATE.md`](../STATE.md) for a deeper analysis of why patching Addressables runtime to eliminate the junction step is not worth the effort.)
 
 ## End-to-end test plan
 
 1. Apply CRC + offline patches.
 2. Disconnect network (WiFi off, or firewall-block the game).
 3. Exit Steam Client completely.
-4. Run `Setup.cmd` once.
-5. Launch `メルストM.exe` directly.
-6. Expect: title screen ("Merc StoriA" logo, "Game Start!" button) → Game Start → home menu → bottom tabs (Home / Story / Guild / Gallery / Park) all render with full art and localised labels.
-7. `netstat -ano | findstr <pid>` should show zero non-loopback connections.
+4. Launch `メルストM.exe` (the launcher creates the junction on first run if needed, then spawns the real player).
+5. Expect: title screen ("Merc StoriA" logo, "Game Start!" button) → Game Start → home menu → bottom tabs (Home / Story / Guild / Gallery / Park) all render with full art and localised labels.
+6. `netstat -ano | findstr <pid>` should show zero non-loopback connections.
 
 If a specific bundle is missing from the cache, `File.ReadAllBytes` throws, the async state machine logs `GetAsync: Failed (URL: ...)`, and that screen won't load. Run the game once online with that bundle's screen visited, then disconnect.
 
@@ -162,11 +163,10 @@ If a specific bundle is missing from the cache, `File.ReadAllBytes` throws, the 
 
 | Path | Purpose |
 |---|---|
-| `patch_offline.py` | Apply all 8 offline patches; idempotent |
-| `verify_patches.py` | Read-only sanity check (CRC + offline) |
-| `bundle_cache.py` | Copy `%LocalLow%/.../AssetBundle` → `<game>/AssetBundle` (bilingual, default zh) |
-| `launcher/` | Self-contained launcher that creates the junction on first launch |
-| `Setup.cmd` | Legacy fallback if the launcher isn't shipped |
+| `scripts/patch_offline.py` | Apply all 8 offline patches; idempotent (`mercstoria patch-offline`) |
+| `scripts/verify_patches.py` | Read-only sanity check (CRC + offline) (`mercstoria verify-patches`) |
+| `scripts/bundle_cache.py` | Copy `%LocalLow%/.../AssetBundle` → `<game>/AssetBundle` (bilingual, default zh) (`mercstoria bundle-cache`) |
+| `launcher/` | Self-contained launcher that creates the junction on first launch (drop-in `メルストM.exe` replacement) |
 | `il2cpp_output/dump.cs` | Truth source for RVAs |
 
 ## External references

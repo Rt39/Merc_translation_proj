@@ -16,7 +16,11 @@ Idempotent: re-running is a no-op.
 import sys, os, shutil
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64
 
-import mercstoria_config as cfg
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from mercstoria import config as cfg
 
 cfg.enable_utf8_stdout()
 

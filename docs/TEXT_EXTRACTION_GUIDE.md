@@ -134,7 +134,7 @@ StorySceneYamlData {                         // memberCount = 21
 
 For dialogue, only `Speakers` (string[]) and `Text` (string) matter. Everything else is per-scene metadata.
 
-Implemented in `merc_decrypt.py` as the `Reader` class. Subobjects use `obj_header()` to peel the `memberCount` byte (`0xFF` = null).
+Implemented in `mercstoria/memorypack.py` as the `Reader` class (also exported via `from mercstoria import memorypack`). Subobjects use `obj_header()` to peel the `memberCount` byte (`0xFF` = null).
 
 ### Heuristic scanning (no schema needed)
 
@@ -164,7 +164,7 @@ Length stability is the simplest path: AES-CBC ciphertext = `iv (16) + ceil((pla
 
 ## End-to-end pipeline
 
-**A. Extract → JSON.** `merc_storia_toolkit.py extract` walks every `StoryMasterData/`, decrypts, runs the heuristic scanner, writes one JSON per story. `extract_metadata_full.py` produces `(chapter_id, story_id, title, episode_name)` tuples from `MasterData/`. Merge for a fully labelled translation file. ~4,000 stories, ~120 k dialogue lines, ~25 MB JSON, ~30 s.
+**A. Extract → JSON.** `mercstoria extract-story` walks every `StoryMasterData/`, decrypts, runs the full MemoryPack Reader (only bundles whose round-trip is byte-identical land in the JSON output), and writes one JSON per story labelled with chapter/episode metadata pulled from `StoryMasterData` + `ChapterMasterData`. `mercstoria extract-misc` covers all 15 master bundles via the same Reader/Writer (see [`MASTERDATA_SCHEMA_GUIDE_zh-CN.md`](MASTERDATA_SCHEMA_GUIDE_zh-CN.md)). ~4,000 stories, ~120 k dialogue lines, ~25 MB JSON, ~30 s.
 
 **B. Translate.** Out of scope here. Walk the JSONs, send each `Text` (and each speaker) to an LLM with surrounding scene context for consistency, write back. Harvest character-name glossary from `dump.cs`.
 
@@ -179,7 +179,7 @@ Length stability is the simplest path: AES-CBC ciphertext = `iv (16) + ceil((pla
 
 The trick is steps 4–5: **do not** parse and re-serialize the full MemoryPack tree. We only mutate strings in place — everything else is byte-for-byte preserved, so per-scene metadata layouts can change between game patches without breaking the repacker.
 
-Speaker names appear in **two** places: scene `Speakers: string[]` AND `StorySceneCharacterYamlData.Key` / `DisplayName` for on-stage characters. The toolkit's per-story JSON layout exposes both — edit the JSON and both update on repack. For a worked example of the byte-level global string-replace technique (kept separately because it doesn't need extract/repack), see [`translate_1621.py`](../translate_1621.py).
+Speaker names appear in **two** places: scene `Speakers: string[]` AND `StorySceneCharacterYamlData.Key` / `DisplayName` for on-stage characters. The toolkit's per-story JSON layout exposes both — edit the JSON and both update on repack.
 
 **D. Round-trip verify.** `verify_repack.py` decrypts a repacked bundle, re-runs the heuristic scanner, asserts translations round-trip. `repack.py` has a built-in self-test on a single sample bundle (`eb777f...`, story 1621).
 
@@ -198,7 +198,7 @@ Speaker names appear in **two** places: scene `Speakers: string[]` AND `StorySce
 ## What did NOT work
 
 - **MessagePack instead of MemoryPack.** Leading byte (`0x02`) of `StoryYamlData` is also a valid MessagePack `positive fixint 2` — long detour. Cysharp's MemoryPack is the actual serializer.
-- **Full schema-driven (de)serializer.** Written and abandoned: every game update can shift nullability or type. The heuristic in-place mutator is patch-tolerant. Full parser kept in `merc_decrypt.py` for reference / debugging only.
+- **Full schema-driven (de)serializer.** First written and abandoned because each game update could shift nullability or type. Restored once `dump.cs` made the schema authoritative — `mercstoria/memorypack.py` now round-trips 4008/4013 story bundles byte-identical, plus all 15 master bundles. The historical heuristic scanner remains in `scripts/extract_repack.py` as a fallback for any future bundle that isn't yet schema-mapped.
 - **Replacing strings without re-encoding the length prefix.** Naïve byte-level find/replace corrupts the length header. Always re-emit `(int32 ~byteCount, int32 charCount, utf8…)`.
 - **Hoping the AES key was per-bundle.** It's a single global constant.
 
@@ -206,11 +206,11 @@ Speaker names appear in **two** places: scene `Speakers: string[]` AND `StorySce
 
 | Path | Purpose |
 |---|---|
-| `merc_storia_toolkit.py` | Unified CLI: `extract` / `extract-story` / `extract-misc` / `repack` / `repack-story` / `repack-misc` / `test-repack` |
-| `merc_decrypt.py` | Reference: decrypt + full MemoryPack `Reader` for `StoryYamlData` |
-| `translate_1621.py` | Worked example: story 1621 → Chinese |
-| `deploy_bundles.py` | Copy `repacked_bundles/` onto the live cache (auto-prefers game folder over LocalLow) |
-| `bundle_cache.py` | Bundle the LocalLow CDN cache into the game folder for shipping |
+| `scripts/extract_repack.py` | Unified CLI (via `mercstoria <subcmd>`): `extract` / `extract-story` / `extract-misc` / `repack` / `repack-story` / `repack-misc` / `test-repack` |
+| `mercstoria/memorypack.py` | Decrypt + full MemoryPack `Reader`/`Writer` for `StoryYamlData` and 15 master records |
+| `scripts/check_roundtrip.py` | `mercstoria check-roundtrip [N]` — sanity-check Reader/Writer on N story bundles |
+| `scripts/deploy.py` | `mercstoria deploy` — copy `repacked_bundles/` onto the live cache (auto-prefers game folder over LocalLow) |
+| `scripts/bundle_cache.py` | `mercstoria bundle-cache` — bundle the LocalLow CDN cache into the game folder for shipping |
 | `jp_monobehaviours.txt` | Inventory of all MonoBehaviours containing JP strings |
 
 ## External references

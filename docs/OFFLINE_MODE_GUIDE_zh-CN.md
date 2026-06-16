@@ -1,6 +1,6 @@
 # Merc Storia —— 离线模式修补指南
 
-`patch_offline.py` 如何让游戏在 Steam 客户端关闭、网络断开的情况下也能启动并正常玩。本指南叠加在 [`CRC_PATCH_GUIDE_zh-CN.md`](CRC_PATCH_GUIDE_zh-CN.md) 之上 —— 先跑 `patch_crc3.py`。
+`scripts/patch_offline.py`（CLI：`mercstoria patch-offline`）如何让游戏在 Steam 客户端关闭、网络断开的情况下也能启动并正常玩。本指南叠加在 [`CRC_PATCH_GUIDE_zh-CN.md`](CRC_PATCH_GUIDE_zh-CN.md) 之上 —— 先跑 `mercstoria patch-crc`。
 
 游戏环境：见 [`README_zh-CN.md`](README_zh-CN.md#游戏环境基准)（在 docs/ 同目录）。
 
@@ -71,7 +71,7 @@ public ValueTask<byte[]> GetAsync(string url, int retryCount, int maxRetry,
 - `persistentDataPath` → `%LOCALAPPDATA%/../LocalLow/jp_co_happyelements/メルストM`。
 - 同步完成的 `ValueTask<byte[]>` 直接构造在调用方分配的 24 字节返回槽里：`_obj=null`、`_result=bytes`、其余清零。
 
-136 字节 x64。所有 IL2CPP 辅助 RVA（`String.IndexOf`、`Substring`、`get_persistentDataPath`、`Path.Combine`、`File.ReadAllBytes`）都列在 `patch_offline.py` 顶部。
+136 字节 x64。所有 IL2CPP 辅助 RVA（`String.IndexOf`、`Substring`、`get_persistentDataPath`、`Path.Combine`、`File.ReadAllBytes`）都列在 `scripts/patch_offline.py` 顶部。
 
 ### 三个值得记住的陷阱
 
@@ -88,12 +88,12 @@ public ValueTask<byte[]> GetAsync(string url, int retryCount, int maxRetry,
 ## 应用
 
 ```bash
-uv run patch_crc3.py
-uv run patch_offline.py
-uv run verify_offline_patch.py
+uv run -m mercstoria patch-crc
+uv run -m mercstoria patch-offline
+uv run -m mercstoria verify-patches
 ```
 
-`patch_offline.py` 幂等且自校验：首次会备份到 `.bak`，写入前逐点校验原字节，游戏更新导致 RVA 偏移会以"MISMATCH"清晰退出。
+`scripts/patch_offline.py` 幂等且自校验：首次会备份到 `.bak`，写入前逐点校验原字节，游戏更新导致 RVA 偏移会以"MISMATCH"清晰退出。
 
 ## 自包含安装的打包方案
 
@@ -101,28 +101,30 @@ uv run verify_offline_patch.py
 
 为此 15 GB 缓存必须**实际存在游戏目录内**。上面的修补只重定向了 CDN HTTP 路径。**Unity Addressables 运行时同样会直接在 `persistentDataPath` 下读写自己的缓存**（catalog.hash、下载的 bundle、完整性校验），这些代码路径深埋在 Addressables / ResourceManager 内部，**不**经过 `AssetBundleHttpClient.GetAsync`。把这些位点一个一个修补又脆又没尽头。
 
-所以我们在文件系统层做重定向：`Setup.cmd`（放在 exe 旁边）建一行 NTFS junction：
+所以我们在文件系统层做重定向：自包含启动器
+（`launcher/build/Release/launcher.exe`，作为 `メルストM.exe` 的替身）首次
+运行时创建 NTFS junction，等价于：
 
 ```
-mklink /J "%USERPROFILE%\AppData\LocalLow\jp_co_happyelements\メルストM\AssetBundle" "%~dp0AssetBundle"
+mklink /J "%USERPROFILE%\AppData\LocalLow\jp_co_happyelements\メルストM\AssetBundle" "<install>\AssetBundle"
 ```
 
-之后，`persistentDataPath\AssetBundle` 就是一个 reparse point，指向打包的 `<install>\AssetBundle\`。游戏自己的代码和 Unity 的 Addressables 运行时都会落到打包的缓存上 —— 它们都不知道路径上有 junction，也不在乎。重跑 `Setup.cmd` 是安全的 no-op。
+之后，`persistentDataPath\AssetBundle` 就是一个 reparse point，指向打包的 `<install>\AssetBundle\`。游戏自己的代码和 Unity 的 Addressables 运行时都会落到打包的缓存上 —— 它们都不知道路径上有 junction，也不在乎。启动器幂等：之后启动会发现 junction 已存在，直接转发到改名后的 `メルストM_app.exe`。
 
 分发目录结构：
 
 ```
 <install>/
-  メルストM.exe
+  メルストM.exe             （启动器，作为替身）
+  メルストM_app.exe         （改名后的原 Unity player）
+  メルストM_app_Data/
   GameAssembly.dll          （已修补）
-  メルストM_Data/
   AssetBundle/              （打包的 15 GB 缓存）
     StandaloneWindows64/<Category>/...
-  Setup.cmd
   ...
 ```
 
-用户工作流：把文件夹拷到任何位置 → 双击 `Setup.cmd` 一次 → 双击 `メルストM.exe`。
+用户工作流：把文件夹拷到任何位置 → 双击 `メルストM.exe`。
 
 **支撑 junction 决定的诊断。** 不加 junction，procmon 抓到：
 
@@ -132,19 +134,18 @@ T+14s   不相关的代码路径：CreateFile <persistent>\AssetBundle\Standalon
 T+14s   约 80 个线程级联 Thread Exit；进程干净退出
 ```
 
-第二个调用走的是 `UnityEngine.AddressableAssets` / `ResourceManager` 内部 —— 它从 `persistentDataPath` 解析缓存路径，根本不会经过我们的修补点。junction 让那个路径"意味着游戏目录"。
+第二个调用走的是 `UnityEngine.AddressableAssets` / `ResourceManager` 内部 —— 它从 `persistentDataPath` 解析缓存路径，根本不会经过我们的修补点。启动器创建的 junction 让那个路径"意味着游戏目录"。
 
-（[`STATE.md`](STATE.md) 中有为什么修补 Addressables 运行时以消除 `Setup.cmd` 不值当的更详细分析。）
+（[`../STATE.md`](../STATE.md) 中有为什么修补 Addressables 运行时以消除 junction 步骤不值当的更详细分析。）
 
 ## 端到端测试方案
 
 1. 应用 CRC + 离线修补。
 2. 断网（关 WiFi 或防火墙阻断游戏）。
 3. 完全退出 Steam 客户端。
-4. 跑一次 `Setup.cmd`。
-5. 直接启动 `メルストM.exe`。
-6. 预期：标题画面（"Merc StoriA" logo，"Game Start!" 按钮）→ Game Start → 主页菜单 → 底部 5 个 tab（Home / Story / Guild / Gallery / Park）都能渲染，立绘和本地化标签齐全。
-7. `netstat -ano | findstr <pid>` 应显示零个非环回连接。
+4. 启动 `メルストM.exe`（启动器首次运行时按需创建 junction，然后转发到真正的 player）。
+5. 预期：标题画面（"Merc StoriA" logo，"Game Start!" 按钮）→ Game Start → 主页菜单 → 底部 5 个 tab（Home / Story / Guild / Gallery / Park）都能渲染，立绘和本地化标签齐全。
+6. `netstat -ano | findstr <pid>` 应显示零个非环回连接。
 
 如果缓存中缺某个 bundle，`File.ReadAllBytes` 会抛异常，async state machine 会记 `GetAsync: Failed (URL: ...)`，那一屏加载失败。联网状态下进一次缺失 bundle 对应的画面让 CDN 补齐，再断网即可。
 
@@ -162,11 +163,10 @@ T+14s   约 80 个线程级联 Thread Exit；进程干净退出
 
 | 路径 | 用途 |
 |---|---|
-| `patch_offline.py` | 应用全部 8 处离线修补；幂等 |
-| `verify_patches.py` | 只读校验（CRC + 离线） |
-| `bundle_cache.py` | 把 `%LocalLow%/.../AssetBundle` 拷到 `<game>/AssetBundle`（双语提示，默认中文） |
-| `launcher/` | 自包含启动器，首次启动时创建 junction |
-| `Setup.cmd` | 没分发启动器时的兜底方案 |
+| `scripts/patch_offline.py` | 应用全部 8 处离线修补；幂等（`mercstoria patch-offline`） |
+| `scripts/verify_patches.py` | 只读校验（CRC + 离线）（`mercstoria verify-patches`） |
+| `scripts/bundle_cache.py` | 把 `%LocalLow%/.../AssetBundle` 拷到 `<game>/AssetBundle`（双语提示，默认中文）（`mercstoria bundle-cache`） |
+| `launcher/` | 自包含启动器（`メルストM.exe` 的替身），首次启动时创建 junction |
 | `il2cpp_output/dump.cs` | RVA 真值来源 |
 
 ## 外部链接

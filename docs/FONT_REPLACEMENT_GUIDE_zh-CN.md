@@ -61,7 +61,9 @@ bundle 里有 12 个材质（`RocknRollStd SDF (Story)`、`RocknRollOne (Brown O
 
 同时把 bundle archive 内 `.resS` 的两个 16 MB 槽都覆盖为新 atlas 字节。
 
-**保留 `m_FaceInfo` 至关重要。** UI 是按原版 `m_LineHeight = 64.0`（2× PointSize）排版的。新烤的 TMP 字体（例如 LogoSCLongZhuTi）会有 TTF 自然的 `m_LineHeight ≈ 39.68`（约 1.24× PointSize）。直接移植会把所有多行对话框 / 菜单框挤扁，文字重叠。当前脚本的 `transplant_keys_into` 显式枚举要复制的 key，并 assert `m_FaceInfo` 不在列表里。
+**保留 `m_FaceInfo` 至关重要。** UI 是按原版 `m_PointSize = 32`、`m_LineHeight = 64.0`（2× PointSize）排版的。新烤的 TMP 字体（例如 LogoSCLongZhuTi）会有 TTF 自然的 `m_LineHeight ≈ 39.68`（约 1.24× PointSize）。直接移植会把所有多行对话框 / 菜单框挤扁，文字重叠。当前脚本的 `transplant_keys_into` 显式枚举要复制的 key，并 assert `m_FaceInfo` 不在列表里。
+
+**推论：源字体必须按 `samplingPointSize = 32` 烘焙** —— 与原 `m_FaceInfo.m_PointSize` 相同。TMP 渲染每个字形时 `quadSize = glyphRect × 请求字号 / m_FaceInfo.m_PointSize`。如果字形表是 28pt 烤的、但保留的 `m_FaceInfo.m_PointSize` 是 32，每个字形显示出来就是预期尺寸的 28/32 ≈ **87.5%** —— 实测就是"字看起来比原版小"。按 32 烤才能让字形矩形与运行时缩放对齐。32pt 时 4096² atlas 上限约 8,800 字符（28pt 时约 10,631），所以字符集要相应裁剪（见步骤 2）。
 
 ### Patch C —— `resources.assets` 中的隐藏字体 asset ⚠️
 
@@ -87,7 +89,7 @@ bundle 里有 12 个材质（`RocknRollStd SDF (Story)`、`RocknRollOne (Brown O
 应用：
 
 ```bash
-uv run font_swap.py "<path>/logofont.bundle"
+uv run -m mercstoria font-swap "<path>/logofont.bundle"
 ```
 
 脚本处理 A + B + C；若 `$MERCSTORIA_MIRROR_DIR`（默认 `D:\mercstoria\`）存在，会镜像一份。
@@ -104,7 +106,7 @@ uv run font_swap.py "<path>/logofont.bundle"
 | Unity Editor | **6000.0.58f2** | 必须与游戏一致，同 TMP 包版本 → typetree 形状一致 |
 | [TextMeshPro](https://docs.unity3d.com/Packages/com.unity.textmeshpro@3.0/manual/index.html) 包 | 6000.x 自带（隶属 `com.unity.ugui`） | 提供 `TMP_FontAsset.CreateFontAsset` + `TryAddCharacters` API |
 | 源字体 | 任意覆盖目标文字的 `.ttf` / `.otf` | CJK 推荐 [LogoSC Long Zhu](https://github.com/atelier-anchor/smiley-sans)，多语种推荐 [Noto Sans](https://fonts.google.com/noto) |
-| `target_chars.txt` | 逗号分隔的十进制 codepoint | 要烤进 atlas 的字符集 |
+| `target_chars.txt` | 单行字面字符（UTF-8） | 要烤进 atlas 的字符集 |
 
 Unity 版本不能换。MonoBehaviour 布局完全取决于 TMP 包版本 —— 用 TMP 4.x 烤出来的 typetree 字段顺序就不一样了，而 Patch C 的字节 diff 之所以能成立，正是因为源和目标的字节布局完全一致。
 
@@ -122,24 +124,22 @@ Unity 版本不能换。MonoBehaviour 布局完全取决于 TMP 包版本 ——
 ```
 Assets/
 ├── <your-font>.ttf                 拷贝进来的源字体
-├── target_chars.txt                逗号分隔的十进制 codepoint
+├── target_chars.txt                单行字面字符（UTF-8）
 ├── Editor/
 │   └── RegenAndBuildFont.cs        烘焙脚本（见下）
 └── AssetBundles/                   输出目录（脚本会建）
 ```
 
-`target_chars.txt` 是单行的十进制 codepoint，逗号分隔。一般做法是把游戏原版字符集和你的目标文字集合并：
+`target_chars.txt` 是单行字面字符（UTF-8，无分隔符）。由 [`scripts/export_chars.py`](../scripts/export_chars.py)（CLI：`mercstoria export-chars`）从 `tools/` 下的权威字表生成。脚本将字源分为两类：
 
-```
-# 推荐配方：
-#   * 游戏原 RocknRollStd SDF 的 7,007 日文字符
-#   * GB2312（约 6,763 字符），覆盖简中
-#   * 翻译草稿里出现过的所有字
-# 合起来大约 10,000–11,000 字符。PointSize 28 在 4096×4096 atlas 上能装下约
-# 10,631；32pt 上限约 8,800。
-```
+- **REQUIRED（必带，永不裁剪）：** ASCII ∪ CJK 标点 ∪ 平假名 ∪ 片假名 ∪ 全/半角符号 ∪ 常用漢字 2,136（日）∪ **通用规范汉字表一级字 3,500** ∪ 仓库根目录下所有 `translate_*.py` 中的每一个码位 ∪（开启 `--include-corpus` 时）`extracted_data/**/*.json` 中的所有字符。
+- **FILL（按 7000hanzi 频率序填到上限为止）：** 通用规范汉字表二级字 3,000 ∪ qweyouke "7000" 简中字表。
 
-构造字符集的 `export_chars.py` 留给读者；权威参考是 [TMP_FontAsset.HasCharacters](https://docs.unity3d.com/Packages/com.unity.textmeshpro@3.0/api/TMPro.TMP_FontAsset.html#TMPro_TMP_FontAsset_HasCharacters_System_String_) 文档。
+旧版只按频率截到 top-5,500，导致 ~499 个一级字（赛 / 翼 / 羹 …）被静默丢弃。新版用必带 + 填充的两段式：一级字保证全收，atlas 满了也不掉；若任何一级字未能进入最终集合，脚本以"不变量违反"错误退出。当前输出 7,800 字，刚好打满 atlas 上限。
+
+**重要：** 译文中用到但未在图集中的字会在游戏里显示为随机字形碎片（Patch A 清掉了该位置的图集像素，但 Patch C 仍指向原矩形）。译文文件扫描正是为了这一点 —— 翻译集扩张时，在仓库根目录新增 `translate_*.py` 然后重跑 `mercstoria export-chars` 即可。
+
+字形查询权威参考：[TMP_FontAsset.HasCharacters](https://docs.unity3d.com/Packages/com.unity.textmeshpro@3.0/api/TMPro.TMP_FontAsset.html#TMPro_TMP_FontAsset_HasCharacters_System_String_)。
 
 ### 步骤 3：烘焙脚本
 
@@ -170,9 +170,11 @@ public static class RegenAndBuildFont
 
         // ----- 2. 烘焙空字体 asset --------------------------------------------
         // 这些常量必须和游戏原 RocknRollStd SDF 一致，否则 Patch C 的字节 diff 对不齐。
+        // samplingPointSize 必须等于原 m_FaceInfo.m_PointSize（32）；
+        // 按 28 烤会让运行时字形小约 12.5%，因为我们保留了原 m_FaceInfo。
         var fontAsset = TMP_FontAsset.CreateFontAsset(
             font:             ttf,
-            samplingPointSize: 28,
+            samplingPointSize: 32,
             atlasPadding:      5,
             renderMode:        GlyphRenderMode.SDFAA_HINTED,
             atlasWidth:        4096,
@@ -181,14 +183,12 @@ public static class RegenAndBuildFont
             enableMultiAtlasSupport: false);
 
         // ----- 3. 添加目标字符 ------------------------------------------------
-        var chars = File.ReadAllText("Assets/target_chars.txt")
-            .Split(',')
-            .Select(s => s.Trim())
-            .Where(s => s.Length > 0)
-            .Select(int.Parse)
-            .Select(System.Char.ConvertFromUtf32)
-            .ToArray();
-        var charSet = string.Concat(chars);
+        // target_chars.txt 是纯 UTF-8：字面字符，无分隔符。
+        // 顺便剥掉所有空白字符（CR/LF/TAB/空格），让烤出来的字数与文件逻辑字数一致。
+        var charSet = new string(
+            File.ReadAllText("Assets/target_chars.txt")
+                .Where(c => !char.IsWhiteSpace(c))
+                .ToArray());
         if (!fontAsset.TryAddCharacters(charSet, out string missing))
             Debug.LogWarning($"[bake] missing {missing.Length} chars: {missing}");
 
@@ -235,11 +235,11 @@ public static class RegenAndBuildFont
 
 或者在 Editor 里挂个菜单项直接点。
 
-输出：`<项目>/Assets/AssetBundles/logofont.bundle`，这就是 `font_swap.py` 要的输入。
+输出：`<项目>/Assets/AssetBundles/logofont.bundle`，这就是 `mercstoria font-swap` 要的输入。
 
 ### 步骤 5：验证 bundle
 
-跑 `font_swap.py` 前先 sanity-check：
+跑 `mercstoria font-swap` 前先 sanity-check：
 
 ```bash
 uv run python -c "
@@ -266,16 +266,16 @@ for t in atlases:
 
 ```
 fonts: 1, atlases: 1
-  chars=10631 glyphs=10631 line_height=39.something point_size=28
+  chars≈7800 glyphs≈7800 line_height=39.something point_size=32
   atlas 4096x4096 fmt=Alpha8
 ```
 
-如果 `chars` 远小于预期，多半是 `target_chars.txt` 里大部分 codepoint 在源 TTF 里没有 glyph，`TryAddCharacters` 就跳过了 —— 换一个覆盖更广的字体，或者分多次 `TryAddCharacters` 调用、接受较小子集。
+如果 `chars` 远小于预期，多半是 `target_chars.txt` 里大部分字符在源 TTF 里没有 glyph，`TryAddCharacters` 就跳过了 —— 换一个覆盖更广的字体，或者分多次 `TryAddCharacters` 调用、接受较小子集。
 
 ### 步骤 6：替换
 
 ```bash
-uv run font_swap.py "<项目>/Assets/AssetBundles/logofont.bundle"
+uv run -m mercstoria font-swap "<项目>/Assets/AssetBundles/logofont.bundle"
 ```
 
 会自动处理 A + B + C。启动游戏，确认剧情对话（Patch B）和标题画面 / 章节列表（Patch C）都用了新字体。
@@ -293,7 +293,7 @@ uv run font_swap.py "<项目>/Assets/AssetBundles/logofont.bundle"
 
 | 路径 | 用途 |
 |---|---|
-| `font_swap.py` | 通用替换 —— 一次性应用 Patches A + B + C |
+| `scripts/font_swap.py` | 通用替换 —— 一次性应用 Patches A + B + C（`mercstoria font-swap <bundle>`） |
 
 ## 外部链接
 

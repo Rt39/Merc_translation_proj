@@ -35,7 +35,11 @@ import time
 from pathlib import Path
 from typing import Iterable
 
-import mercstoria_config as cfg
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from mercstoria import config as cfg
 
 cfg.enable_utf8_stdout()
 
@@ -57,8 +61,8 @@ _MESSAGES: dict[str, tuple[str, str]] = {
                            "ERROR: source directory does not exist.\nLaunch the game normally first so Unity downloads the CDN bundles into LocalLow."),
     "dest_missing":       ("错误：游戏安装目录不存在。",
                            "ERROR: game install directory does not exist."),
-    "source_is_link":     ("错误：来源 AssetBundle 已是 reparse point（junction / symlink）。\n说明此机器上 launcher 或 Setup.cmd 已运行过，缓存已经在游戏目录里。\n如需重新打包，先删掉那个 junction，让游戏重新下载到 LocalLow。",
-                           "ERROR: source AssetBundle is already a reparse point (junction / symlink).\nLauncher or Setup.cmd has already run on this machine — the cache is already in the game folder.\nTo re-bundle, delete that junction first and let the game re-download to LocalLow."),
+    "source_is_link":     ("错误：来源 AssetBundle 已是 reparse point（junction / symlink）。\n说明此机器上 launcher 已运行过，缓存已经在游戏目录里。\n如需重新打包，先删掉那个 junction，让游戏重新下载到 LocalLow。",
+                           "ERROR: source AssetBundle is already a reparse point (junction / symlink).\nThe launcher has already run on this machine — the cache is already in the game folder.\nTo re-bundle, delete that junction first and let the game re-download to LocalLow."),
     "scanning":           ("正在扫描来源... ",
                            "Scanning source... "),
     "scan_result":        ("找到 {count:,} 个文件，共 {bytes_gb:.2f} GB",

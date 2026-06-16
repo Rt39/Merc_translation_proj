@@ -33,10 +33,10 @@ CRC 不匹配 → bundle 被当作损坏 → 静默从 CDN 重取（或在离线
 ## 应用
 
 ```bash
-uv run patch_crc3.py        # 幂等；写入前会校验原字节
+uv run -m mercstoria patch-crc        # 幂等；写入前会校验原字节
 ```
 
-`patch_crc3.py` 流程：
+`scripts/patch_crc.py` 流程：
 1. 首次运行（`.bak` 不存在）会先备份到 `GameAssembly.dll.bak`。
 2. 读取当前 DLL。
 3. 逐处校验**原字节**与预期一致 —— 不一致时以"MISMATCH"清晰退出（防止游戏更新偏移）。
@@ -60,7 +60,7 @@ uv run patch_crc3.py        # 幂等；写入前会校验原字节
 - 未修补 DLL：bundle 被静默重下，看到的还是原版。
 - 修补后 DLL：损坏的 bundle 被原样加载 —— 看到贴图损坏或那个 asset 触发崩溃，就证明绕过生效。
 
-实操中更省事：跑一次 `font_swap.py`。CRC 修补前字体不变，修补后字体变了。
+实操中更省事：跑一次 `mercstoria font-swap`。CRC 修补前字体不变，修补后字体变了。
 
 ## 试过但不行的
 
@@ -73,8 +73,8 @@ uv run patch_crc3.py        # 幂等；写入前会校验原字节
 
 | 路径 | 用途 |
 |---|---|
-| `patch_crc.py` | 应用 4 处 CRC 修补；幂等 |
-| `verify_patches.py` | 只读检查（CRC + 离线修补） |
+| `scripts/patch_crc.py` | 应用 4 处 CRC 修补；幂等（`mercstoria patch-crc`） |
+| `scripts/verify_patches.py` | 只读检查（CRC + 离线修补）（`mercstoria verify-patches`） |
 | `Il2CppDumper/` | dump 符号（每个游戏版本只做一次），见 [perfare/Il2CppDumper](https://github.com/Perfare/Il2CppDumper) |
 | `il2cpp_output/dump.cs` | RVA 真值来源 |
 | `GameAssembly.dll.bak` | 首次修补前自动创建的备份 |
@@ -82,7 +82,7 @@ uv run patch_crc3.py        # 幂等；写入前会校验原字节
 ## 外部链接
 
 - [perfare/Il2CppDumper](https://github.com/Perfare/Il2CppDumper) —— 从 `GameAssembly.dll` + `global-metadata.dat` 提取 dump.cs 与符号表
-- [Capstone 反汇编引擎](https://www.capstone-engine.org/) —— `patch_crc.py` 用它验证每处修补
+- [Capstone 反汇编引擎](https://www.capstone-engine.org/) —— `scripts/patch_crc.py` 用它验证每处修补
 - [Ghidra](https://github.com/NationalSecurityAgency/ghidra) —— 推荐用来在 dump 出的二进制里做交叉引用
 
 走完本指南后，修改过的 asset bundle 不再被拒绝。继续看 [`TEXT_EXTRACTION_GUIDE.md`](TEXT_EXTRACTION_GUIDE.md) 或 [`FONT_REPLACEMENT_GUIDE.md`](FONT_REPLACEMENT_GUIDE.md)。

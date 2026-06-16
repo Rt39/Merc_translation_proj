@@ -38,8 +38,12 @@ import sys
 import UnityPy
 from UnityPy.streams import EndianBinaryReader
 
-import mercstoria_config as cfg
-from mercstoria_config import (
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from mercstoria import config as cfg
+from mercstoria.config import (
     ATLAS_LEN, RESS_ATLAS_OFFSET,
     BUNDLE_RESS_STD_OFFSET, BUNDLE_RESS_ONE_OFFSET,
     BUNDLE_FONT_PATHID, BUNDLE_RESS_CAB,
