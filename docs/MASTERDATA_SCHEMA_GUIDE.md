@@ -1,5 +1,7 @@
 # MasterData MemoryPack Schema Guide — All 15 MasterData Types
 
+> 中文版请戳[这里](MASTERDATA_SCHEMA_GUIDE_zh-CN.md)。
+
 Full reverse engineering of every MasterData bundle's MemoryPack schema, with
 a Reader/Writer pair that round-trips byte-identically. With this in place,
 string replacement is no longer constrained to the original encoded length —

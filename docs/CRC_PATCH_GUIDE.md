@@ -1,5 +1,7 @@
 # Merc Storia — CRC Patch Guide
 
+> 中文版请戳[这里](CRC_PATCH_GUIDE_zh-CN.md)。
+
 Disable the asset-bundle CRC validator in `GameAssembly.dll`. Without this, every other patch in this project silently fails — modified bundles trigger a "data corruption" path that re-downloads the original from the CDN.
 
 Game environment: see [`README.md`](../README.md#game-environment-canonical).
@@ -51,7 +53,7 @@ A second run is a no-op.
    Tool: [perfare/Il2CppDumper](https://github.com/Perfare/Il2CppDumper) — grab the latest release zip and extract next to the game files.
    - `Il2CppDumper/config.json` sets `ForceVersion: 16` — Unity 6000.x ships a metadata version the dumper does not auto-detect.
 2. Grep `dump.cs` for `AssetBundleRequestOptions`. `get_Crc` is a stub returning `[this+0x18]` — **not** the patch site; the compiler inlined it.
-3. In Ghidra / IDA, load `GameAssembly.dll`, run the dumper's symbol-import script, then x-ref `get_Crc`.
+3. In IDA Pro, load `GameAssembly.dll`, run the dumper's symbol-import script, then x-ref `get_Crc`.
 4. The 4 callers are in `UnityEngine.Networking` bundle-loader internals. Look for `mov edx, [<reg>+0x18]` or `mov edx, [<reg>+0x30]` followed shortly by a call into the CRC validator.
 
 ## Verification (positive control)
@@ -83,6 +85,6 @@ Easier in practice: run `mercstoria font-swap`. Without the CRC patch, the font 
 
 - [perfare/Il2CppDumper](https://github.com/Perfare/Il2CppDumper) — extracts dump.cs + symbol map from `GameAssembly.dll` + `global-metadata.dat`
 - [Capstone disassembler](https://www.capstone-engine.org/) — used by `scripts/patch_crc.py` to verify each patched site
-- [Ghidra](https://github.com/NationalSecurityAgency/ghidra) — recommended for x-ref work on the dumped binary
+- [IDA Pro](https://hex-rays.com/ida-pro) — used for x-ref work on the dumped binary
 
 After this guide, modified asset bundles load without complaint. Continue with [`TEXT_EXTRACTION_GUIDE.md`](TEXT_EXTRACTION_GUIDE.md) or [`FONT_REPLACEMENT_GUIDE.md`](FONT_REPLACEMENT_GUIDE.md).

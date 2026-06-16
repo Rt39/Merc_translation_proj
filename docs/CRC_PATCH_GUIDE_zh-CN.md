@@ -51,7 +51,7 @@ uv run -m mercstoria patch-crc        # 幂等；写入前会校验原字节
    工具：[perfare/Il2CppDumper](https://github.com/Perfare/Il2CppDumper) —— GitHub release 页下载最新 zip，解压到游戏目录旁即可。
    - `Il2CppDumper/config.json` 设了 `ForceVersion: 16` —— Unity 6000.x 的元数据版本 dumper 还没自动识别。
 2. 在 `dump.cs` 中 grep `AssetBundleRequestOptions`。`get_Crc` 是返回 `[this+0x18]` 的简单 getter —— **不是**修补点，因为编译器把它内联了。
-3. 在 Ghidra / IDA 中加载 `GameAssembly.dll`，跑 dumper 的符号导入脚本，然后交叉引用 `get_Crc`。
+3. 在 IDA Pro 中加载 `GameAssembly.dll`，跑 dumper 的符号导入脚本，然后交叉引用 `get_Crc`。
 4. 4 个调用方都在 `UnityEngine.Networking` 的 bundle loader 内部。找 `mov edx, [<reg>+0x18]` 或 `mov edx, [<reg>+0x30]`，紧接着会调用 CRC 校验函数。
 
 ## 验证（正向对照）
@@ -83,6 +83,6 @@ uv run -m mercstoria patch-crc        # 幂等；写入前会校验原字节
 
 - [perfare/Il2CppDumper](https://github.com/Perfare/Il2CppDumper) —— 从 `GameAssembly.dll` + `global-metadata.dat` 提取 dump.cs 与符号表
 - [Capstone 反汇编引擎](https://www.capstone-engine.org/) —— `scripts/patch_crc.py` 用它验证每处修补
-- [Ghidra](https://github.com/NationalSecurityAgency/ghidra) —— 推荐用来在 dump 出的二进制里做交叉引用
+- [IDA Pro](https://hex-rays.com/ida-pro) —— 用来在 dump 出的二进制里做交叉引用
 
 走完本指南后，修改过的 asset bundle 不再被拒绝。继续看 [`TEXT_EXTRACTION_GUIDE.md`](TEXT_EXTRACTION_GUIDE.md) 或 [`FONT_REPLACEMENT_GUIDE.md`](FONT_REPLACEMENT_GUIDE.md)。

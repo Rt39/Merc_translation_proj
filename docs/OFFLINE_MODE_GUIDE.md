@@ -1,5 +1,7 @@
 # Merc Storia — Offline-Mode Patch Guide
 
+> 中文版请戳[这里](OFFLINE_MODE_GUIDE_zh-CN.md)。
+
 How `scripts/patch_offline.py` (CLI: `mercstoria patch-offline`) makes the game launch and play with the Steam Client closed and the network disconnected. Stacks on top of [`CRC_PATCH_GUIDE.md`](CRC_PATCH_GUIDE.md) — run `mercstoria patch-crc` first.
 
 Game environment: see [`README.md`](../README.md#game-environment-canonical).

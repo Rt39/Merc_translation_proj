@@ -121,7 +121,7 @@ uv run -m mercstoria              # 显示完整子命令列表
 - [Cysharp/YetAnotherHttpHandler](https://github.com/Cysharp/YetAnotherHttpHandler) —— 离线模式短路的 rustls HTTPS 客户端
 - [TextMeshPro 包](https://docs.unity3d.com/Packages/com.unity.textmeshpro@3.0/manual/index.html) —— 在 Unity 里烤源字体 bundle 必备
 - [Capstone 反汇编引擎](https://www.capstone-engine.org/) —— 修补验证步骤会用
-- [Ghidra](https://github.com/NationalSecurityAgency/ghidra) —— 推荐用来在 dump 出的二进制里做交叉引用
+- [IDA Pro](https://hex-rays.com/ida-pro) —— 用来在 dump 出的二进制里做交叉引用
 - 各指南详细链接：[CRC](CRC_PATCH_GUIDE_zh-CN.md#外部链接)、[离线](OFFLINE_MODE_GUIDE_zh-CN.md#外部链接)、[文本](TEXT_EXTRACTION_GUIDE_zh-CN.md#外部链接)、[字体](FONT_REPLACEMENT_GUIDE_zh-CN.md#外部链接)
 
 ## 进度

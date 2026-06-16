@@ -1,5 +1,7 @@
 # Merc Storia (メルクストーリア) — Translation Project
 
+> 中文版请戳[这里](docs/README_zh-CN.md)。
+
 End-to-end toolkit for translating the Steam release of **メルクストーリア - 癒術士と心の旋律 -** into a non-Japanese language. The game ships with no built-in i18n; everything here is reverse-engineered.
 
 Five independent accomplishments that together make full translation possible:
@@ -121,7 +123,7 @@ The only non-Python prerequisite for the patches themselves is **Il2CppDumper**,
 - [Cysharp/YetAnotherHttpHandler](https://github.com/Cysharp/YetAnotherHttpHandler) — the rustls HTTPS client we short-circuit for offline mode
 - [TextMeshPro package](https://docs.unity3d.com/Packages/com.unity.textmeshpro@3.0/manual/index.html) — required to bake the source font bundle in Unity
 - [Capstone disassembler](https://www.capstone-engine.org/) — used in the patch verification step
-- [Ghidra](https://github.com/NationalSecurityAgency/ghidra) — recommended for x-ref work on the dumped binary
+- [IDA Pro](https://hex-rays.com/ida-pro) — used for x-ref work on the dumped binary (the `.i64` database lives next to `GameAssembly.dll`)
 - Per-guide details: [CRC](docs/CRC_PATCH_GUIDE.md#external-references), [offline](docs/OFFLINE_MODE_GUIDE.md#external-references), [text](docs/TEXT_EXTRACTION_GUIDE.md#external-references), [font](docs/FONT_REPLACEMENT_GUIDE.md#external-references)
 
 ## Status

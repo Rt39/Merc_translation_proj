@@ -1,6 +1,6 @@
 # Merc Storia Launcher
 
-中文版：[`README_zh-CN.md`](README_zh-CN.md)
+> 中文版请戳[这里](README_zh-CN.md)。
 
 Self-contained Windows launcher that replaces what used to be a manual
 `mklink /J` setup step. On double-click it creates an NTFS mount-point

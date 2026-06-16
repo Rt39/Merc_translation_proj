@@ -1,5 +1,7 @@
 # Merc Storia — Font Replacement Guide
 
+> 中文版请戳[这里](FONT_REPLACEMENT_GUIDE_zh-CN.md)。
+
 How the game loads its UI font, and the patch pipeline that swaps the bundled `RocknRollStd SDF` for an arbitrary TMP font.
 
 Game environment: see [`README.md`](../README.md#game-environment-canonical). CRC patch ([`CRC_PATCH_GUIDE.md`](CRC_PATCH_GUIDE.md)) must be applied first or modified bundles silently revert.

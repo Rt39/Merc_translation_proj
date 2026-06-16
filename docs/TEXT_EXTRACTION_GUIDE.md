@@ -1,5 +1,7 @@
 # Merc Storia — Text Decrypt / Extract / Repack Guide
 
+> 中文版请戳[这里](TEXT_EXTRACTION_GUIDE_zh-CN.md)。
+
 How story dialogue is stored, how to decrypt and parse the `MemoryPack` payload, how to mutate strings, and how to repack into a UnityFS bundle the game accepts.
 
 Game environment: see [`README.md`](../README.md#game-environment-canonical). CRC patch ([`CRC_PATCH_GUIDE.md`](CRC_PATCH_GUIDE.md)) must be applied first or modified bundles silently revert.

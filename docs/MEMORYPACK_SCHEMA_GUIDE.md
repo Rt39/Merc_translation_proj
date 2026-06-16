@@ -1,5 +1,7 @@
 # MemoryPack Schema Guide — Merc Storia Story Bundles
 
+> 中文版请戳[这里](MEMORYPACK_SCHEMA_GUIDE_zh-CN.md)。
+
 Reverse-engineered MemoryPack schema for Merc Storia `StoryYamlData` and the
 Reader/Writer rewrite that enables byte-identical round-trip — the foundation
 needed to add/remove dialogue chunks safely (rather than only in-place string
