@@ -3,35 +3,35 @@
 End-to-end pipeline for extracting, translating, and repacking every piece of
 translatable Japanese text in the game (story dialogue + master data).
 
-Story path uses a full MemoryPack schema (see merc_decrypt.py) — JSON ↔ bytes
-is byte-identical for 4008/4013 vanilla bundles, so translators can insert
-or remove scenes, not just edit existing ones.
+Story path uses a full MemoryPack schema (see `mercstoria.memorypack`) — JSON
+↔ bytes is byte-identical for 4008/4013 vanilla bundles, so translators can
+insert or remove scenes, not just edit existing ones.
 
 Usage
 -----
-    uv run merc_storia_toolkit.py extract
+    uv run -m mercstoria extract
         Extract everything: stories AND misc MasterData. Equivalent to running
         `extract-story` then `extract-misc`.
 
-    uv run merc_storia_toolkit.py extract-story
+    uv run -m mercstoria extract-story
         Stories only → extracted_data/story/<story_id>.json. The JSON mirrors
         StoryYamlData verbatim (every field from dump.cs, including _mc and
         _skipped markers used to round-trip exactly). Translators edit
         scenes[*].Text / .Speakers / character DisplayName fields in place.
 
-    uv run merc_storia_toolkit.py extract-misc
+    uv run -m mercstoria extract-misc
         MasterData bundles with JP text → extracted_data/misc/<AssetName>.json.
 
-    uv run merc_storia_toolkit.py repack
+    uv run -m mercstoria repack
         Repack everything (stories + misc) that has been modified.
 
-    uv run merc_storia_toolkit.py repack-story
+    uv run -m mercstoria repack-story
         Repack only modified story JSONs → repacked_bundles/story/<bundle>.
 
-    uv run merc_storia_toolkit.py repack-misc
+    uv run -m mercstoria repack-misc
         Repack only modified misc JSONs → repacked_bundles/misc/<bundle>.
 
-    uv run merc_storia_toolkit.py test-repack
+    uv run -m mercstoria test-repack
         Round-trip a single bundle to confirm the pipeline.
 
 Translation workflow
@@ -234,7 +234,7 @@ def repack_bundle(original_path: str, output_path: str, mutate_plaintext):
 
 # === Story dialogue ===
 #
-# Story extract/repack uses the full MemoryPack schema from merc_decrypt.py
+# Story extract/repack uses the full MemoryPack schema from mercstoria.memorypack
 # (Reader/Writer round-trip is byte-identical on 4008/4013 vanilla bundles).
 # That gives translators the freedom to insert or delete scenes, not just
 # edit existing strings. The old "splice on byte offsets" path is gone.
@@ -630,7 +630,7 @@ def cmd_extract_misc():
 
     Two paths:
       * full-schema bundles (FULL_SCHEMA_MASTER) — records are parsed via the
-        merc_decrypt Reader. JSON has structured records that translators can
+        mercstoria.memorypack Reader. JSON has structured records that translators can
         edit freely (string lengths can change). Reader is verified by
         round-tripping the original plaintext byte-identical before writing
         the JSON; mismatches are logged and the file is skipped.
@@ -741,7 +741,7 @@ def _is_modified(path: str, key: str, fps: dict, force: bool) -> bool:
 
 
 def _story_dict_from_json(payload: dict) -> dict:
-    """Reconstruct the merc_decrypt-shape story dict from a JSON payload.
+    """Reconstruct the mercstoria.memorypack-shape story dict from a JSON payload.
 
     The JSON wraps `Scenes` as a list of `{key, scene}` for human readability;
     Writer wants `[(key, scene_dict), ...]`. Strip the metadata header here
@@ -758,7 +758,7 @@ def cmd_repack_story(force: bool = False):
     """`repack-story` command: rebuild every modified story JSON into a
     UnityFS bundle under repacked_bundles/story/<bundle>.
 
-    Uses the full MemoryPack schema (merc_decrypt.Writer). Translators can
+    Uses the full MemoryPack schema (mercstoria.memorypack.Writer). Translators can
     add or remove `Scenes[]` entries; the Writer regenerates the bundle's
     plaintext from scratch and the AES-encrypted TextAsset is rebuilt
     around the new length. CRC patches must be in place or the modified
@@ -813,7 +813,7 @@ def cmd_repack_misc(force: bool = False):
     """`repack-misc` command: same idea as `repack-story` but for MasterData.
 
     Two paths, dispatched on the JSON's `schema` field:
-      * `"full"`   — Records[] is fed back through merc_decrypt.serialize_*.
+      * `"full"`   — Records[] is fed back through mercstoria.memorypack.serialize_*.
       * `"offset"` — splice strings by byte offset; new bytes must match the
                      original encoded length.
 

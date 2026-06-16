@@ -19,6 +19,8 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "scripts"
 
 SUBCOMMANDS = {
+    "setup":           ("setup",           "End-to-end pre-translation: patch DLL + font swap + extract + bundle cache + deploy launcher"),
+    "release":         ("release",         "End-to-end post-translation: repack changed JSONs + deploy to cache"),
     "extract":         ("extract_repack",  "Extract story + misc to extracted_data/ (forward args to extract_repack.py)"),
     "repack":          ("extract_repack",  "(alias of extract — same script, different subcommand arg)"),
     "deploy":          ("deploy",          "Deploy repacked_bundles/ to the live cache"),

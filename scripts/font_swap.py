@@ -13,8 +13,7 @@ make the new font render across the entire game:
      not registered in resources.assets's serialized file.
 
 Usage:
-    uv run --with UnityPy --with lz4 --with numpy --with Pillow \
-        font_swap.py <path-to-font-bundle> [--game-dir <steam install path>]
+    uv run -m mercstoria font-swap <path-to-font-bundle> [--game-dir <steam install path>]
 
 If --game-dir is omitted the default Steam path is used. If a `D:\\mercstoria\\`
 sibling install exists the patches are mirrored to it too (useful when you keep
@@ -427,7 +426,7 @@ def main():
     ap.add_argument(
         "--game-dir",
         default=None,
-        help="Game install dir (default: auto-detected via mercstoria_config)",
+        help="Game install dir (default: auto-detected via mercstoria.config)",
     )
     ap.add_argument(
         "--mirror-dir",

@@ -85,4 +85,4 @@ uv run -m mercstoria patch-crc        # 幂等；写入前会校验原字节
 - [Capstone 反汇编引擎](https://www.capstone-engine.org/) —— `scripts/patch_crc.py` 用它验证每处修补
 - [IDA Pro](https://hex-rays.com/ida-pro) —— 用来在 dump 出的二进制里做交叉引用
 
-走完本指南后，修改过的 asset bundle 不再被拒绝。继续看 [`TEXT_EXTRACTION_GUIDE.md`](TEXT_EXTRACTION_GUIDE.md) 或 [`FONT_REPLACEMENT_GUIDE.md`](FONT_REPLACEMENT_GUIDE.md)。
+走完本指南后，修改过的 asset bundle 不再被拒绝。继续看 [`TEXT_EXTRACTION_GUIDE_zh-CN.md`](TEXT_EXTRACTION_GUIDE_zh-CN.md) 或 [`FONT_REPLACEMENT_GUIDE_zh-CN.md`](FONT_REPLACEMENT_GUIDE_zh-CN.md)。

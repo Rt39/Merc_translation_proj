@@ -24,11 +24,12 @@ STATE.md
 *.bundle.bak
 *.bundle.original
 test_repacked*.bundle
+!logofont.bundle
 
 # Font assets (large, distribution-restricted)
 *.ttf
 
-# Extracted data (large, regeneratable by `merc_storia_toolkit.py extract`)
+# Extracted data (large, regeneratable by `mercstoria extract`)
 merc_storia_dialogue.json
 merc_metadata.json
 jp_monobehaviours.txt

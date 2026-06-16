@@ -1,6 +1,6 @@
 """Deploy repacked bundles into the live cache.
 
-Used after `merc_storia_toolkit.py repack` produces translated bundles
+Used after `mercstoria repack` produces translated bundles
 under `repacked_bundles/{story,misc}/`. This script overwrites the live
 cache copies and keeps a `.bak` of each replaced original so a rollback
 is one `shutil.copy2` away.
@@ -40,7 +40,7 @@ from mercstoria import config as cfg
 cfg.enable_utf8_stdout()
 
 
-# Output of `extract_repack.py repack` — always at the repo root, not next
+# Output of `mercstoria repack` — always at the repo root, not next
 # to this script (which now lives in scripts/).
 _HERE = Path(__file__).resolve().parent.parent
 REPACKED_STORY = _HERE / "repacked_bundles" / "story"

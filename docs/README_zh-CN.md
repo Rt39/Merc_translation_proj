@@ -8,7 +8,7 @@
 2. **文本解密 / 提取 / 重打包** —— 大约 4,000 个剧情 bundle 的完整管线（AES-256-CBC + MemoryPack）。见 [`TEXT_EXTRACTION_GUIDE_zh-CN.md`](TEXT_EXTRACTION_GUIDE_zh-CN.md)。
 3. **字体替换** —— 同时修补字体实际所在的三个物理位置，TMP 字体可任意替换。见 [`FONT_REPLACEMENT_GUIDE_zh-CN.md`](FONT_REPLACEMENT_GUIDE_zh-CN.md)。
 4. **离线模式** —— 8 处修补（Steam 绕过 + Cysharp 证书跳过 + 纯文件读取 GetAsync），让安装包无需联网、无需 Steam。见 [`OFFLINE_MODE_GUIDE_zh-CN.md`](OFFLINE_MODE_GUIDE_zh-CN.md)。
-5. **自包含启动器** —— 替换 `メルストM.exe` 的单击启动器，把 NTFS junction 创建步骤打进了 EXE 自身。见 [`../launcher/README.md`](../launcher/README.md)。
+5. **自包含启动器** —— 替换 `メルストM.exe` 的单击启动器，把 NTFS junction 创建步骤打进了 EXE 自身。见 [`../launcher/README_zh-CN.md`](../launcher/README_zh-CN.md)。
 
 ## 游戏环境（基准）
 
@@ -34,27 +34,36 @@
 
 ## 工作流（完整翻译）
 
+整个工具链折成两条命令：
+
 ```
    原版游戏安装
-   ────────────────►  mercstoria patch-crc        ──►  GameAssembly.dll（CRC 已修补）
-                          │
-                          ▼
-                mercstoria extract
-                ──────────────────────────────►  extracted_data/
-                                                   story/<id>.json    （4,008 个剧情）
-                                                   misc/<asset>.json  （15 个 master bundle，完整 schema）
-                                                   .fingerprints.pkl  （重打包时跳过未改动的文件）
-                          │
-                  （译者就地修改 value 字段）
-                          │
-                          ▼
-                mercstoria repack ───────────────►  repacked_bundles/<bundle>
-                          │
-                          ▼
-   mercstoria font-swap logofont.bundle ─────────►  字体已换，可启动
+   ─────────────►  mercstoria setup
+                     │
+                     ├── 1. patch-crc           （4 处 CRC 绕过）
+                     ├── 2. patch-offline       （8 处：Steam 绕过 + 证书跳过 + GetAsync）
+                     ├── 3. font-swap           （atlas + bundle + 隐藏字体，复用 logofont.bundle）
+                     ├── 4. extract             （4,008 剧情 + 15 master bundle → extracted_data/）
+                     ├── 5. bundle-cache        （LocalLow → <game>/AssetBundle）
+                     └── 6. deploy launcher     （重命名原 exe，把 launcher.exe 放进游戏目录）
+
+       （译者就地修改 extracted_data/ 下的 JSON）
+
+                  ─────────────►  mercstoria release
+                                    ├── 1. repack    （改过的 JSON → repacked_bundles/）
+                                    └── 2. deploy    （推回正在运行的缓存）
 ```
 
-若要发布离线版本，再运行 `mercstoria patch-offline`，把 LocalLow 缓存复制到 `<install>/AssetBundle/`，按 [`../launcher/README.md`](../launcher/README.md) 构建并部署 `launcher.exe`，整个文件夹分发即可。最终用户工作流：双击 1 次。
+每一步都幂等 —— `mercstoria setup` 和 `mercstoria release` 想跑几次都行。
+单步跳过用 `--skip-<name>`，例如 `mercstoria setup --skip-bundle-cache --skip-launcher`
+适用于纯开发环境。orchestrator 需要的两个产物都已随仓库提供：
+
+- `logofont.bundle` —— LogoSC SDF 字体 bundle，烘焙好后放在仓库根目录
+- `launcher/build/Release/launcher.exe` —— 用一行 cmake 构建：
+  `cmake -S launcher -B launcher/build -A x64 && cmake --build launcher/build --config Release`
+
+底层各步骤也都对外暴露（`patch-crc`、`extract`、`repack`、`deploy`、`font-swap`……），
+不带参数运行 `mercstoria` 可看完整子命令列表。
 
 > 所有脚本都通过 `mercstoria` 包入口调用：`uv run -m mercstoria <subcmd> [args]`。不带参数运行可看到完整子命令列表。
 
@@ -71,6 +80,8 @@ workshop/
 │   └── memorypack.py           AES 解密 + 完整 MemoryPack Reader/Writer
 │
 ├── scripts/                    各子命令的 CLI 脚本（由 __main__.py 转发）
+│   ├── setup.py                端到端译前 orchestrator
+│   ├── release.py              端到端译后 orchestrator
 │   ├── patch_crc.py            CRC 绕过（4 处）
 │   ├── patch_offline.py        Steam 绕过 + 证书跳过 + GetAsync（8 处）
 │   ├── verify_patches.py       两套修补的只读检查
@@ -87,12 +98,13 @@ workshop/
 │   ├── TEXT_EXTRACTION_GUIDE.md      （+ _zh-CN）
 │   ├── FONT_REPLACEMENT_GUIDE.md     （+ _zh-CN）
 │   ├── MEMORYPACK_SCHEMA_GUIDE.md    （+ _zh-CN）story bundle wire format
-│   ├── MASTERDATA_SCHEMA_GUIDE_zh-CN.md  全部 15 个 master bundle 的 schema
+│   ├── MASTERDATA_SCHEMA_GUIDE.md    （+ _zh-CN）全部 15 个 master bundle 的 schema
 │   └── README_zh-CN.md               本文件
 │
 └── launcher/
     ├── CMakeLists.txt          MSVC + MinGW 均可
     ├── README.md
+    ├── README_zh-CN.md
     ├── src/                    launcher.c, junction.c/.h
     ├── test/                   test_junction.c
     └── cmake/RunJunctionTest.cmake

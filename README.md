@@ -36,27 +36,38 @@ The toolkit auto-detects the game install. To override, set `MERCSTORIA_GAME_DIR
 
 ## Workflow (full translation)
 
+The toolkit collapses into two commands:
+
 ```
    raw game install
-   ────────────────►  mercstoria patch-crc      ──►  GameAssembly.dll (CRC patched)
-                          │
-                          ▼
-                mercstoria extract
-                ──────────────────────────────►  extracted_data/
-                                                   story/<id>.json    (4,008 stories)
-                                                   misc/<asset>.json  (15 master bundles, full schema)
-                                                   .fingerprints.pkl  (skip untouched on repack)
-                          │
-                  (translator edits values in place)
-                          │
-                          ▼
-                mercstoria repack ─────────────►  repacked_bundles/<bundle>
-                          │
-                          ▼
-   mercstoria font-swap logofont.bundle ─────────►  font swapped, ready to launch
+   ─────────────►  mercstoria setup
+                     │
+                     ├── 1. patch-crc           (4 sites)
+                     ├── 2. patch-offline       (8 sites — Steam bypass + cert + GetAsync)
+                     ├── 3. font-swap           (atlas + bundle + hidden font, uses logofont.bundle)
+                     ├── 4. extract             (4,008 stories + 15 master bundles → extracted_data/)
+                     ├── 5. bundle-cache        (LocalLow → <game>/AssetBundle)
+                     └── 6. deploy launcher     (rename pristine exe + drop launcher.exe)
+
+       (translator edits values in place under extracted_data/)
+
+                  ─────────────►  mercstoria release
+                                    ├── 1. repack    (changed JSONs → repacked_bundles/)
+                                    └── 2. deploy    (push to live cache)
 ```
 
-For offline shipping, also run `mercstoria patch-offline`, copy the LocalLow cache into `<install>/AssetBundle/`, build and drop `launcher/build/Release/launcher.exe` from [`launcher/README.md`](launcher/README.md), and ship the whole folder. End-user workflow becomes a single double-click.
+Each step is idempotent — re-run `mercstoria setup` or `mercstoria release` as
+many times as you like. Skip individual steps with `--skip-<name>` (e.g.
+`mercstoria setup --skip-bundle-cache --skip-launcher` against a pristine dev
+install). Both prebuilt artefacts the orchestrator needs ship in the repo:
+
+- `logofont.bundle` — the LogoSC SDF font bundle, baked at the repo root
+- `launcher/build/Release/launcher.exe` — build it once with
+  `cmake -S launcher -B launcher/build -A x64 && cmake --build launcher/build --config Release`
+
+Underlying steps are also exposed individually (`patch-crc`, `extract`,
+`repack`, `deploy`, `font-swap`, ...) — see `mercstoria` with no args for the
+full list.
 
 > All scripts are invoked through the `mercstoria` package entry point: `uv run -m mercstoria <subcommand> [args]`. Run with no args to see the full subcommand list.
 
@@ -73,6 +84,8 @@ workshop/
 │   └── memorypack.py           AES decrypt + full MemoryPack Reader/Writer
 │
 ├── scripts/                    individual CLI scripts (forwarded to by __main__.py)
+│   ├── setup.py                end-to-end pre-translation orchestrator
+│   ├── release.py              end-to-end post-translation orchestrator
 │   ├── patch_crc.py            CRC bypass (4 sites)
 │   ├── patch_offline.py        Steam bypass + cert skip + GetAsync (8 sites)
 │   ├── verify_patches.py       read-only check on both patch sets
@@ -89,12 +102,13 @@ workshop/
 │   ├── TEXT_EXTRACTION_GUIDE.md      (+ _zh-CN)
 │   ├── FONT_REPLACEMENT_GUIDE.md     (+ _zh-CN)
 │   ├── MEMORYPACK_SCHEMA_GUIDE.md    (+ _zh-CN) story bundle wire format
-│   ├── MASTERDATA_SCHEMA_GUIDE_zh-CN.md  all 15 master bundle schemas
+│   ├── MASTERDATA_SCHEMA_GUIDE.md    (+ _zh-CN) all 15 master bundle schemas
 │   └── README_zh-CN.md               this file in 简体中文
 │
 └── launcher/
     ├── CMakeLists.txt          MSVC + MinGW
     ├── README.md
+    ├── README_zh-CN.md
     ├── src/                    launcher.c, junction.c/.h
     ├── test/                   test_junction.c
     └── cmake/RunJunctionTest.cmake

@@ -8,7 +8,7 @@ the game folder on first run, so Unity Addressables and the patched
 GetAsync both transparently land on the bundled cache without any network.
 
 Without this step:
-  - `patch_offline.py` alone is not enough; Unity still reads from the
+  - `mercstoria patch-offline` alone is not enough; Unity still reads from the
     persistent cache, which is empty on a copied-elsewhere install
   - The launcher creates the junction, but the junction target is empty,
     so the game's first bundle load fails
@@ -16,14 +16,14 @@ Without this step:
 Workflow:
   1. Play the game normally for long enough to populate the LocalLow cache
      (or, for QA: visit every chapter that the translated build needs).
-  2. Apply CRC + offline patches (`patch_crc.py`, `patch_offline.py`).
+  2. Apply CRC + offline patches (`mercstoria patch-crc`, `mercstoria patch-offline`).
   3. Run THIS script — copies LocalLow -> game folder. Idempotent: re-running
      skips files that already exist with the same size.
   4. Build and deploy the launcher (see `launcher/README.md`).
   5. Zip the entire game folder and distribute.
 
 Prompts and progress are bilingual; default is 简体中文 (zh). Override:
-    uv run bundle_cache.py --lang en
+    uv run -m mercstoria bundle-cache --lang en
 """
 from __future__ import annotations
 
