@@ -31,8 +31,11 @@ from pathlib import Path
 GAME_FOLDER_NAME = "メルクストーリア - 癒術士と心の旋律 -"
 APP_EXE_NAME     = "メルストM.exe"
 APP_DATA_NAME    = "メルストM_Data"
-# After the launcher is deployed the original exe is renamed to *_app.exe and
-# the data folder to *_app_Data. Discovery accepts either layout.
+# Translated-build launcher sits alongside the original exe; original is
+# left untouched so a Steam "Verify integrity" still works.
+APP_EXE_CHS      = "メルストM_chs.exe"
+# Legacy (rename-based) deployment — kept for backwards-compatible discovery
+# of installs that were patched with the older orchestrator.
 APP_EXE_RENAMED  = "メルストM_app.exe"
 APP_DATA_RENAMED = "メルストM_app_Data"
 

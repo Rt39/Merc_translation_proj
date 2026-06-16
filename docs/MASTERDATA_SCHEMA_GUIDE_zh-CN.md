@@ -2,22 +2,9 @@
 
 把游戏里所有 15 个 MasterData bundle 的 MemoryPack schema 完整逆向，落地为
 字节级 round-trip 的 Reader/Writer。这样字符串替换不再受原始字节长度限制 ——
-翻译后的中文长度可以任意，而不需要严格 ≤ 原日文。
-
-## 这件事为什么要做
-
-老 toolkit 的 misc 路径用 `find_all_strings` 扫一遍 plaintext，按字节偏移做
-splice。这条路的死穴是：**新字符串编码后必须和原字符串等长**，否则后续所有
-offset 都失效。日译中经常长度不等，于是想替换 `「合戦」→「大战」` 都得抠
-字节。
-
-把全部 15 个 MasterData 按完整 schema 解出来，记录变成结构化对象，序列化时
-整段重写 plaintext，length 想换多少换多少。和 story 路径走的是同一套
-Reader/Writer 风格(在 `mercstoria/memorypack.py` 里)，沿用 `_mc` + 截断对象 +
-Nullable\<float\> 的 8 字节裸内存约定。
-
-`FULL_SCHEMA_MASTER` 调度表现在覆盖全部 15 个 bundle，offset 路径仍然保留在
-代码里以备未来未注册的 bundle 用，但目前没有任何 bundle 落到那条路径上。
+序列化时整段重写 plaintext，翻译后的中文长度可以任意，不必严格 ≤ 原日文。
+`FULL_SCHEMA_MASTER` 调度表覆盖全部 15 个 bundle；`scripts/extract_repack.py`
+里的 offset-splice 兜底路径目前已无 bundle 走到。
 
 ## 权威 schema(取自 dump.cs)
 
@@ -25,33 +12,55 @@ Nullable\<float\> 的 8 字节裸内存约定。
 两者在 `StoryMasterDataRecord` 和 `UnitMasterDataRecord` 上不一致，照声明顺序
 读会错位。
 
-### 外层 wrapper(都是同一个 shape)
+### 外层 wrapper(15 个全部一样)
 
-| 类型 | mc | 字段 |
-|---|---|---|
-| ChapterMasterData | 1 | `ChapterMasterDataRecord[] Records` |
-| StoryMasterData | 1 | `StoryMasterDataRecord[] Records` |
-| UnitMasterData | 1 | `UnitMasterDataRecord[] Records` |
-
+每个 bundle 都是 `mc=1`,只有一个字段 `<Name>MasterDataRecord[] Records`。
 数组用集合规则:`int32 length, [values...]`(注意是原始 int32,**不是**
 `~length`,和字符串规则不同;`-1 = null`)。
 
-### ChapterMasterDataRecord(mc=9)
+### 嵌套类型
 
-ctor: `(int id, string name, StoryType type, int eventId, string eventName,
-Country eventCountry, int order, MainStoryFilter mainStoryFilter,
-EventStoryFilter eventStoryFilter)`
+| 类型 | wire size | 备注 |
+|---|---|---|
+| 所有 enum(StoryType/Country/Rarity/Gender/...Filter) | int32 | CompilerGenerated underlying |
+| TimeSpan | int64 ticks | 8 字节 |
+| Vector2 | f32 ×2 | unmanaged 紧排 |
+| Vector3 | f32 ×3 | unmanaged 紧排 |
+| `int[]`(如 SkillIds) | int32 length + int32 ×n | -1 = null |
+| `string[]`(如 Children/SkillNames) | int32 length + 标准 string ×n | -1 = null |
 
-### StoryMasterDataRecord(mc=9)
+### 全部 15 条记录(mc 即 ctor 参数数)
 
-ctor: `(int chapterId, int storyId, string title, string eventName,
-string subTitle, StoryType type, int unitId, string[] children, int order)`
+按字母序列出,字段顺序按 `[MemoryPackConstructor]` 参数顺序。enum 全部 int32,
+TimeSpan = i64,Vector2/3 = unmanaged f32 紧排。
+
+| 类型 | mc | ctor 关键字段 |
+|---|---|---|
+| BackgroundMasterDataRecord | 9 | `id, code, type, name, description, country, order, backgroundFilter, countryFilter` |
+| BackgroundMusicMasterDataRecord | 7 | `id, code, name, description, country, order, countryFilter` |
+| ChapterMasterDataRecord | 9 | `id, name, type(StoryType), eventId, eventName, eventCountry(Country), order, mainStoryFilter, eventStoryFilter` |
+| GuildMapConditionMasterDataRecord | 4 | `id, name, GuildMapConditionObjectData[] objects, GuildMapConditionConstantData constantData` |
+| GuildTournamentMasterDataRecord | 5 | `id, identifier(enum), block(enum), rank, guildName` |
+| LeaderStyleMasterDataRecord | 5 | `id, name, description, unitId, order` |
+| LoadingComicMasterDataRecord | 2 | `id, name` |
+| MainCharacterStyleMasterDataRecord | 5 | `id, name, description, unitId, order` |
+| MemorialQuestMasterDataRecord | 4 | `id, name, description, bgmId` |
+| MonsterMasterDataRecord | 51 | 见下文 |
+| SquareBackgroundMasterDataRecord | 3 | `id, name, countryFilter` |
+| StampMasterDataRecord | 6 | `id, name, displayName, index, type, iconAssetName` |
+| StoryMasterDataRecord | 9 | `chapterId, storyId, title, eventName, subTitle, type(StoryType), unitId, string[] children, order` —— ctor 顺序坑,见下 |
+| UnitMasterDataRecord | 65 | 见下文 |
+| UnitSkillEffectMasterDataRecord | 7 | `id, name, description, category, type, int[] targets, float[][] parameters` |
+
+下面 4 条需要额外说明的展开来讲。
+
+#### StoryMasterDataRecord —— ctor vs 字段声明顺序坑(mc=9)
 
 字段声明顺序里 `subTitle` 在 `eventName` 前面,但 ctor 把 `eventName` 放第
 四个、`subTitle` 放第五个。**MemoryPack 走 ctor 顺序**,首次写错过来的人(我)
 被坑了一次,实测验证之后才修对。
 
-### UnitMasterDataRecord(mc=65 = 0x41)
+#### UnitMasterDataRecord(mc=65 = 0x41)
 
 ctor 参数表(完整 65 项,见 `dump.cs:488936`):
 
@@ -90,37 +99,6 @@ record。Reader 用同一个 `unit_record()` 递归处理。
 
 `AuraTrace` 是 `UnitAuraTraceData`(mc=3,`(string Target, Vector3 Offset,
 Vector3 Scale)`)。
-
-### 嵌套类型
-
-| 类型 | wire size | 备注 |
-|---|---|---|
-| 所有 enum(StoryType/Country/Rarity/Gender/...Filter) | int32 | CompilerGenerated underlying |
-| TimeSpan | int64 ticks | 8 字节 |
-| Vector2 | f32 ×2 | unmanaged 紧排 |
-| Vector3 | f32 ×3 | unmanaged 紧排 |
-| `int[]`(SkillIds) | int32 length + int32 ×n | -1 = null |
-| `string[]`(Children/SkillNames/...) | int32 length + 标准 string ×n | -1 = null |
-
-### 其余 12 个 MasterData 记录(全部 mc=ctor 参数数)
-
-按 `[MemoryPackConstructor]` 参数顺序列出。enum 全部 int32，TimeSpan = i64，
-Vector2/3 = unmanaged f32 紧排。
-
-| 类型 | mc | ctor 关键字段 |
-|---|---|---|
-| BackgroundMasterDataRecord | 9 | `id, code, type, name, description, country, order, backgroundFilter, countryFilter` |
-| BackgroundMusicMasterDataRecord | 7 | `id, code, name, description, country, order, countryFilter` |
-| GuildMapConditionMasterDataRecord | 4 | `id, name, GuildMapConditionObjectData[] objects, GuildMapConditionConstantData constantData` |
-| GuildTournamentMasterDataRecord | 5 | `id, identifier(enum), block(enum), rank, guildName` |
-| LeaderStyleMasterDataRecord | 5 | `id, name, description, unitId, order` |
-| LoadingComicMasterDataRecord | 2 | `id, name` |
-| MainCharacterStyleMasterDataRecord | 5 | `id, name, description, unitId, order` |
-| MemorialQuestMasterDataRecord | 4 | `id, name, description, bgmId` |
-| MonsterMasterDataRecord | 51 | 见下文 |
-| SquareBackgroundMasterDataRecord | 3 | `id, name, countryFilter` |
-| StampMasterDataRecord | 6 | `id, name, displayName, index, type, iconAssetName` |
-| UnitSkillEffectMasterDataRecord | 7 | `id, name, description, category, type, int[] targets, float[][] parameters` |
 
 #### MonsterMasterDataRecord(mc=51)
 
@@ -266,6 +244,6 @@ JSON 里**不要动** `_mc` / `_skipped` / `schema` / `bundle` /
   - SquareBackgroundMasterDataRecord 在 `dump.cs:482102`(ctor `:482133`)
   - StampMasterDataRecord 在 `dump.cs:482343`(ctor `:482399`)
   - UnitSkillEffectMasterDataRecord 在 `dump.cs:489289`(ctor `:489349`)
-- `MEMORYPACK_SCHEMA_GUIDE_zh-CN.md` — story bundle 的姊妹文档,wire format
+- `STORY_BUNDLE_GUIDE_zh-CN.md` — story bundle 的姊妹文档,wire format
   细节(`_mc` 截断、Nullable\<float\> 8 字节、字符串 `~utf8_byte_count`)
   在那里讲过,这里不重复。

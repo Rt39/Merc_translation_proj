@@ -111,34 +111,23 @@ def step_deploy_launcher() -> None:
             f"setup: {LAUNCHER_EXE} not found. Build it with\n"
             f"    cmake -S launcher -B launcher/build -A x64\n"
             f"    cmake --build launcher/build --config Release\n"
-            f"or pass --skip-launcher to run against the pristine exe."
+            f"or pass --skip-launcher."
         )
 
     game = cfg.game_dir()
     pristine_exe   = game / cfg.APP_EXE_NAME
-    pristine_data  = game / cfg.APP_DATA_NAME
-    renamed_exe    = game / cfg.APP_EXE_RENAMED
-    renamed_data   = game / cfg.APP_DATA_RENAMED
+    chs_launcher   = game / cfg.APP_EXE_CHS
 
-    if renamed_exe.is_file() and renamed_data.is_dir():
-        # Already deployed — only refresh the launcher binary.
-        shutil.copy2(LAUNCHER_EXE, pristine_exe)
-        print(f"  [refresh] {pristine_exe} <- {LAUNCHER_EXE}")
-        return
-
-    if not pristine_exe.is_file() or not pristine_data.is_dir():
+    if not pristine_exe.is_file():
         raise SystemExit(
-            f"setup: expected {pristine_exe} + {pristine_data} for first-time "
-            f"launcher deploy. The game folder doesn't look pristine — refusing "
-            f"to rename anything. Inspect manually."
+            f"setup: {pristine_exe} not found — the original game exe must be "
+            f"present so the launcher can chain into it."
         )
 
-    print(f"  [rename] {pristine_exe.name}  -> {renamed_exe.name}")
-    pristine_exe.rename(renamed_exe)
-    print(f"  [rename] {pristine_data.name} -> {renamed_data.name}")
-    pristine_data.rename(renamed_data)
-    shutil.copy2(LAUNCHER_EXE, pristine_exe)
-    print(f"  [copy]   {LAUNCHER_EXE} -> {pristine_exe}")
+    shutil.copy2(LAUNCHER_EXE, chs_launcher)
+    print(f"  [copy] {LAUNCHER_EXE} -> {chs_launcher}")
+    print(f"  Original {cfg.APP_EXE_NAME} left untouched. Double-click "
+          f"{cfg.APP_EXE_CHS} to launch the translated build.")
 
 
 def main() -> int:

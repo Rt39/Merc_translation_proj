@@ -1,24 +1,27 @@
 // launcher.c — Merc Storia self-contained launcher.
 //
-// Drop-in replacement for メルストM.exe. On double-click:
+// Drop-in companion to メルストM.exe. On double-click:
 //   1. Resolve game folder = dirname(GetModuleFileNameW).
 //   2. Compute <persistent> = %USERPROFILE%\AppData\LocalLow\jp_co_happyelements\メルストM
 //      and <persist_ab>     = <persistent>\AssetBundle.
 //   3. If <persist_ab> already a reparse point -> trust it.
 //      Otherwise create the mount-point junction <persist_ab> -> <game>\AssetBundle.
 //      Existing non-junction directory is moved aside to *.pre_setup{N}.
-//   4. CreateProcessW the real exe (メルストM_app.exe).
+//   4. CreateProcessW the original game exe (メルストM.exe).
 //
-// Distribution layout (rename done once by the packager):
+// Distribution layout (no renaming required):
 //
 //     <install>/
-//        メルストM.exe          (THIS launcher)
-//        メルストM_app.exe      (original Unity player)
-//        メルストM_app_Data/    (renamed _Data folder; Unity derives the name
-//                                from the exe basename)
+//        メルストM.exe          (original Unity player — untouched)
+//        メルストM_Data/        (original data folder — untouched)
+//        メルストM_chs.exe      (THIS launcher — drop-in next to the original)
 //        GameAssembly.dll       (CRC + offline patched)
 //        AssetBundle/           (bundled CDN cache, ~15 GB)
 //        ...
+//
+// Users double-click メルストM_chs.exe; the launcher installs the junction
+// and chains into メルストM.exe. The original exe is untouched so a Steam
+// "Verify integrity" still works on the unmodified files.
 
 #define WIN32_LEAN_AND_MEAN
 #define UNICODE
@@ -28,7 +31,7 @@
 
 #include "junction.h"
 
-#define APP_EXE       L"メルストM_app.exe"
+#define APP_EXE       L"メルストM.exe"
 #define ASSETBUNDLE   L"AssetBundle"
 #define PERSIST_REL   L"AppData\\LocalLow\\jp_co_happyelements\\メルストM"
 
@@ -141,8 +144,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE hp, LPWSTR cmdLine, int show) {
 
     if (GetFileAttributesW(real_exe) == INVALID_FILE_ATTRIBUTES)
         die(L"" APP_EXE L" not found next to the launcher.\n"
-            L"The packager must rename the original game exe to this name "
-            L"(and the data folder to <same>_Data).", 0);
+            L"This launcher must sit in the same folder as the original game exe.", 0);
 
     wchar_t cmd[BUF_CHARS];
     swprintf_s(cmd, BUF_CHARS, L"\"%s\"", real_exe);

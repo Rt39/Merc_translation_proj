@@ -104,29 +104,40 @@ Goal: copy the install folder to another machine, run one setup script, double-c
 For that the 15 GB cache must **physically live inside the game folder**. The patches above only redirect the CDN HTTP path. **Unity's Addressables runtime ALSO reads/writes its own cache directly under `persistentDataPath`** (catalog.hash, downloaded bundles, integrity checks) via code paths deep inside Addressables / ResourceManager — not through `AssetBundleHttpClient.GetAsync`. Patching every one of those call sites is brittle and unbounded.
 
 So we redirect at the filesystem layer: the bundled launcher
-(`launcher/build/Release/launcher.exe`, drop-in replacement for
-`メルストM.exe`) creates an NTFS junction on first run, equivalent to:
+(`launcher/build/Release/launcher.exe`, deployed alongside the original
+exe as `メルストM_chs.exe` — see [`launcher/README.md`](../launcher/README.md))
+creates an NTFS junction on first run, equivalent to:
 
 ```
 mklink /J "%USERPROFILE%\AppData\LocalLow\jp_co_happyelements\メルストM\AssetBundle" "<install>\AssetBundle"
 ```
 
-After that, `persistentDataPath\AssetBundle` is a reparse point pointing at the bundled `<install>\AssetBundle\`. Both the patched HTTP code AND Unity's Addressables runtime land on the bundled cache — neither knows or cares the path traverses a junction. The launcher is idempotent: subsequent launches notice the junction already exists and skip straight to spawning the renamed `メルストM_app.exe`.
+After that, `persistentDataPath\AssetBundle` is a reparse point pointing at
+the bundled `<install>\AssetBundle\`. Both the patched HTTP code AND Unity's
+Addressables runtime land on the bundled cache — neither knows or cares the
+path traverses a junction. The launcher is idempotent: subsequent launches
+notice the junction already exists and skip straight to chaining into the
+original `メルストM.exe`.
 
 Distribution layout:
 
 ```
 <install>/
-  メルストM.exe             (the launcher, drop-in replacement)
-  メルストM_app.exe         (original Unity player, renamed by deploy)
-  メルストM_app_Data/
+  メルストM.exe             (the original Unity player, untouched — Steam Verify still passes)
+  メルストM_Data/           (untouched)
+  メルストM_chs.exe         (the launcher, dropped in by `mercstoria setup`)
   GameAssembly.dll          (patched)
   AssetBundle/              (the bundled 15 GB cache)
     StandaloneWindows64/<Category>/...
   ...
 ```
 
-User workflow: copy folder anywhere → double-click `メルストM.exe`.
+User workflow: copy folder anywhere → double-click `メルストM_chs.exe`.
+
+(`メルストM.exe` still exists but won't launch the untranslated Japanese
+build — `GameAssembly.dll` is patched in place; `_chs.exe` is just an extra
+hop that creates the junction first. Steam's "Verify integrity of game
+files" still passes against the untouched original exe + `_Data/`.)
 
 **Diagnostic that motivates the junction.** Without it, procmon trace shows:
 
@@ -145,7 +156,7 @@ The second call goes through `UnityEngine.AddressableAssets` / `ResourceManager`
 1. Apply CRC + offline patches.
 2. Disconnect network (WiFi off, or firewall-block the game).
 3. Exit Steam Client completely.
-4. Launch `メルストM.exe` (the launcher creates the junction on first run if needed, then spawns the real player).
+4. Launch `メルストM_chs.exe` (the launcher creates the junction on first run if needed, then chains into `メルストM.exe`).
 5. Expect: title screen ("Merc StoriA" logo, "Game Start!" button) → Game Start → home menu → bottom tabs (Home / Story / Guild / Gallery / Park) all render with full art and localised labels.
 6. `netstat -ano | findstr <pid>` should show zero non-loopback connections.
 
@@ -155,11 +166,9 @@ If a specific bundle is missing from the cache, `File.ReadAllBytes` throws, the 
 
 - **Patching only the public 2-arg / 4-arg overloads** — slot too small; body overflows neighbour. Patch the 5-arg, public overloads forward to it.
 - **Returning `default(ValueTask<byte[]>)` (null bytes)** — original `C1`/`C2` approach. Catalog refresh sees null bytes, drops every locator, "通信に失敗" or black screen.
-- **Local HTTPS server + FlClash hosts override** — works end-to-end but needs a separate process + self-signed cert.
+- **Local HTTPS server** — works end-to-end but needs a separate process + self-signed cert.
 - **Hosts-file edit + Fiddler reverse proxy** — admin required, Fiddler upstream re-resolves through hosts and loops.
 - **WinINet / IE proxy** — YAHH (rustls/hyper) ignores it.
-- **FlClash PROCESS-NAME rule routing メルストM.exe to Fiddler** — even with `find-process-mode: always`, rule doesn't catch YAHH connections (opened from a Rust thread with non-standard process attribution).
-- **BepInEx / MelonLoader hooking** — both broken on Unity 6000.x.
 
 ## File reference
 
@@ -167,8 +176,8 @@ If a specific bundle is missing from the cache, `File.ReadAllBytes` throws, the 
 |---|---|
 | `scripts/patch_offline.py` | Apply all 8 offline patches; idempotent (`mercstoria patch-offline`) |
 | `scripts/verify_patches.py` | Read-only sanity check (CRC + offline) (`mercstoria verify-patches`) |
-| `scripts/bundle_cache.py` | Copy `%LocalLow%/.../AssetBundle` → `<game>/AssetBundle` (bilingual, default zh) (`mercstoria bundle-cache`) |
-| `launcher/` | Self-contained launcher that creates the junction on first launch (drop-in `メルストM.exe` replacement) |
+| `scripts/bundle_cache.py` | Copy `%LocalLow%/.../AssetBundle` → `<game>/AssetBundle` (`mercstoria bundle-cache`) |
+| `launcher/` | Self-contained launcher that creates the junction on first launch (deployed as `メルストM_chs.exe` alongside the untouched original) |
 | `il2cpp_output/dump.cs` | Truth source for RVAs |
 
 ## External references

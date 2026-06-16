@@ -5,26 +5,10 @@
 Full reverse engineering of every MasterData bundle's MemoryPack schema, with
 a Reader/Writer pair that round-trips byte-identically. With this in place,
 string replacement is no longer constrained to the original encoded length —
-translated text can be any size, not just `≤` the original Japanese.
-
-## Why this exists
-
-The legacy misc path scanned the plaintext with `find_all_strings` and spliced
-new strings in by byte offset. The fatal flaw: **the new string's encoded
-length must match the original**, otherwise every following offset shifts and
-the data corrupts. Japanese → Chinese rarely matches in length, so even
-swapping `「合戦」→「大战」` required surgical byte counting.
-
-Decoding all 15 MasterData bundles via their full schema converts every
-record into a structured object. On serialization the plaintext is rewritten
-end-to-end, so individual string lengths can change freely. The Reader/Writer
-style mirrors the story path (in `mercstoria/memorypack.py`), reusing the
-same `_mc` (member count) header, truncated-object handling, and
-8-byte-raw-memory `Nullable<float>` convention.
-
-The `FULL_SCHEMA_MASTER` dispatch table now covers all 15 bundles. The legacy
-offset-splice path is still in the codebase as a fallback for any
-not-yet-registered bundle, but no bundles currently route through it.
+the plaintext is rewritten end-to-end on serialization, so translated text
+can be any size, not just `≤` the original Japanese. The `FULL_SCHEMA_MASTER`
+dispatch table covers all 15 bundles; the legacy offset-splice fallback in
+`scripts/extract_repack.py` is unused at present.
 
 ## Authoritative schema (from dump.cs)
 
@@ -33,34 +17,55 @@ declaration order. They differ in `StoryMasterDataRecord` and
 `UnitMasterDataRecord` — reading by declaration order will misalign every
 field after the swap.
 
-### Outer wrappers (all share one shape)
+### Outer wrapper (one shape for all 15)
 
-| Type | mc | Fields |
-|---|---|---|
-| ChapterMasterData | 1 | `ChapterMasterDataRecord[] Records` |
-| StoryMasterData | 1 | `StoryMasterDataRecord[] Records` |
-| UnitMasterData | 1 | `UnitMasterDataRecord[] Records` |
-| (12 others) | 1 | `<Name>MasterDataRecord[] Records` |
-
+Every bundle has `mc=1` and a single field `<Name>MasterDataRecord[] Records`.
 The array uses the collection rule: `int32 length, [values...]` — note this
 is a raw `int32` (**not** `~length`, unlike strings); `-1 = null`.
 
-### ChapterMasterDataRecord (mc=9)
+### Nested primitive types
 
-ctor: `(int id, string name, StoryType type, int eventId, string eventName,
-Country eventCountry, int order, MainStoryFilter mainStoryFilter,
-EventStoryFilter eventStoryFilter)`
+| Type | Wire size | Notes |
+|---|---|---|
+| Every enum (StoryType/Country/Rarity/Gender/...Filter) | int32 | CompilerGenerated underlying |
+| TimeSpan | int64 ticks | 8 bytes |
+| Vector2 | f32 ×2 | unmanaged, packed |
+| Vector3 | f32 ×3 | unmanaged, packed |
+| `int[]` (e.g. SkillIds) | int32 length + int32 ×n | -1 = null |
+| `string[]` (e.g. Children/SkillNames) | int32 length + standard string ×n | -1 = null |
 
-### StoryMasterDataRecord (mc=9)
+### Records (mc = ctor parameter count throughout)
 
-ctor: `(int chapterId, int storyId, string title, string eventName,
-string subTitle, StoryType type, int unitId, string[] children, int order)`
+Listed alphabetically, in `[MemoryPackConstructor]` parameter order. Every
+enum is `int32`, `TimeSpan = i64`, `Vector2/3` is unmanaged packed `f32`.
+
+| Type | mc | ctor key fields |
+|---|---|---|
+| BackgroundMasterDataRecord | 9 | `id, code, type, name, description, country, order, backgroundFilter, countryFilter` |
+| BackgroundMusicMasterDataRecord | 7 | `id, code, name, description, country, order, countryFilter` |
+| ChapterMasterDataRecord | 9 | `id, name, type(StoryType), eventId, eventName, eventCountry(Country), order, mainStoryFilter, eventStoryFilter` |
+| GuildMapConditionMasterDataRecord | 4 | `id, name, GuildMapConditionObjectData[] objects, GuildMapConditionConstantData constantData` |
+| GuildTournamentMasterDataRecord | 5 | `id, identifier(enum), block(enum), rank, guildName` |
+| LeaderStyleMasterDataRecord | 5 | `id, name, description, unitId, order` |
+| LoadingComicMasterDataRecord | 2 | `id, name` |
+| MainCharacterStyleMasterDataRecord | 5 | `id, name, description, unitId, order` |
+| MemorialQuestMasterDataRecord | 4 | `id, name, description, bgmId` |
+| MonsterMasterDataRecord | 51 | see below |
+| SquareBackgroundMasterDataRecord | 3 | `id, name, countryFilter` |
+| StampMasterDataRecord | 6 | `id, name, displayName, index, type, iconAssetName` |
+| StoryMasterDataRecord | 9 | `chapterId, storyId, title, eventName, subTitle, type(StoryType), unitId, string[] children, order` — ctor-vs-decl trap, see below |
+| UnitMasterDataRecord | 65 | see below |
+| UnitSkillEffectMasterDataRecord | 7 | `id, name, description, category, type, int[] targets, float[][] parameters` |
+
+The four records that need extra detail follow.
+
+#### StoryMasterDataRecord — ctor-vs-declaration trap (mc=9)
 
 The field declaration places `subTitle` before `eventName`, but the ctor
 puts `eventName` 4th and `subTitle` 5th. **MemoryPack follows ctor order.**
 First implementation hit this trap; only round-trip testing exposed it.
 
-### UnitMasterDataRecord (mc=65 = 0x41)
+#### UnitMasterDataRecord (mc=65 = 0x41)
 
 Full 65-parameter ctor (see `dump.cs:488936`):
 
@@ -101,37 +106,6 @@ record. Reader recurses through the same `unit_record()` method.
 
 `AuraTrace` is `UnitAuraTraceData` (mc=3, `(string Target, Vector3 Offset,
 Vector3 Scale)`).
-
-### Nested primitive types
-
-| Type | Wire size | Notes |
-|---|---|---|
-| Every enum (StoryType/Country/Rarity/Gender/...Filter) | int32 | CompilerGenerated underlying |
-| TimeSpan | int64 ticks | 8 bytes |
-| Vector2 | f32 ×2 | unmanaged, packed |
-| Vector3 | f32 ×3 | unmanaged, packed |
-| `int[]` (SkillIds) | int32 length + int32 ×n | -1 = null |
-| `string[]` (Children/SkillNames/...) | int32 length + standard string ×n | -1 = null |
-
-### The other 12 MasterData records (mc = ctor parameter count throughout)
-
-Listed in `[MemoryPackConstructor]` parameter order. Every enum is `int32`,
-`TimeSpan = i64`, `Vector2/3` is unmanaged packed `f32`.
-
-| Type | mc | ctor key fields |
-|---|---|---|
-| BackgroundMasterDataRecord | 9 | `id, code, type, name, description, country, order, backgroundFilter, countryFilter` |
-| BackgroundMusicMasterDataRecord | 7 | `id, code, name, description, country, order, countryFilter` |
-| GuildMapConditionMasterDataRecord | 4 | `id, name, GuildMapConditionObjectData[] objects, GuildMapConditionConstantData constantData` |
-| GuildTournamentMasterDataRecord | 5 | `id, identifier(enum), block(enum), rank, guildName` |
-| LeaderStyleMasterDataRecord | 5 | `id, name, description, unitId, order` |
-| LoadingComicMasterDataRecord | 2 | `id, name` |
-| MainCharacterStyleMasterDataRecord | 5 | `id, name, description, unitId, order` |
-| MemorialQuestMasterDataRecord | 4 | `id, name, description, bgmId` |
-| MonsterMasterDataRecord | 51 | see below |
-| SquareBackgroundMasterDataRecord | 3 | `id, name, countryFilter` |
-| StampMasterDataRecord | 6 | `id, name, displayName, index, type, iconAssetName` |
-| UnitSkillEffectMasterDataRecord | 7 | `id, name, description, category, type, int[] targets, float[][] parameters` |
 
 #### MonsterMasterDataRecord (mc=51)
 
@@ -284,7 +258,7 @@ typically make the game read garbage values.
   - SquareBackgroundMasterDataRecord at `dump.cs:482102` (ctor `:482133`)
   - StampMasterDataRecord at `dump.cs:482343` (ctor `:482399`)
   - UnitSkillEffectMasterDataRecord at `dump.cs:489289` (ctor `:489349`)
-- [`MEMORYPACK_SCHEMA_GUIDE.md`](MEMORYPACK_SCHEMA_GUIDE.md) — sister doc
+- [`STORY_BUNDLE_GUIDE.md`](STORY_BUNDLE_GUIDE.md) — sister doc
   for the story bundles. Wire-format details (`_mc` truncation,
   `Nullable<float>` 8-byte layout, `~utf8_byte_count` strings) are covered
   there and not repeated here.

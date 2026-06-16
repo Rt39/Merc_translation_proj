@@ -8,7 +8,7 @@ Without N, processes the full set. Returns non-zero exit code on any mismatch.
 
 Bundles whose plaintext doesn't reproduce byte-for-byte are listed with the
 divergence offset and surrounding bytes so you can locate which struct went
-wrong. See `docs/MEMORYPACK_SCHEMA_GUIDE_zh-CN.md` for the schema.
+wrong. See `docs/STORY_BUNDLE_GUIDE_zh-CN.md` for the schema.
 """
 import os, sys
 from pathlib import Path

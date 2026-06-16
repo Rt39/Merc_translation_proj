@@ -7,21 +7,19 @@ End-to-end toolkit for translating the Steam release of **メルクストーリ�
 Five independent accomplishments that together make full translation possible:
 
 1. **CRC bypass** — 4 `xor edx, edx` patches in `GameAssembly.dll` so modified bundles are not silently re-downloaded. See [`docs/CRC_PATCH_GUIDE.md`](docs/CRC_PATCH_GUIDE.md).
-2. **Text decrypt / extract / repack** — full pipeline for ~4,000 story bundles (AES-256-CBC + MemoryPack). See [`docs/TEXT_EXTRACTION_GUIDE.md`](docs/TEXT_EXTRACTION_GUIDE.md).
+2. **Text decrypt / extract / repack** — full pipeline for ~4,000 story bundles (AES-256-CBC + MemoryPack). See [`docs/STORY_BUNDLE_GUIDE.md`](docs/STORY_BUNDLE_GUIDE.md).
 3. **Font replacement** — TMP font swap across the three physical places the font actually lives. See [`docs/FONT_REPLACEMENT_GUIDE.md`](docs/FONT_REPLACEMENT_GUIDE.md).
 4. **Offline mode** — 8 patches (Steam bypass + Cysharp cert-skip + pure file-read GetAsync) for self-contained installs that need no internet and no Steam. See [`docs/OFFLINE_MODE_GUIDE.md`](docs/OFFLINE_MODE_GUIDE.md).
 5. **Self-contained launcher** — single-click replacement for `メルストM.exe` that bundles the NTFS-junction setup into the EXE. See [`launcher/README.md`](launcher/README.md).
 
 ## Game environment (canonical)
 
-The five components reference this section instead of duplicating it.
-
 | Item | Value |
 |---|---|
 | Engine | Unity 6000.0.58f2, IL2CPP, Windows x64 |
 | Store | Steam |
 | Game folder | `<Steam>/steamapps/common/メルクストーリア - 癒術士と心の旋律 -/` |
-| Player exe | `メルストM.exe` + `メルストM_Data/` (or `メルストM_app.exe` + `メルストM_app_Data/` after launcher deploy) |
+| Player exe | `メルストM.exe` + `メルストM_Data/` (untouched; translated build adds `メルストM_chs.exe` alongside) |
 | IL2CPP binary | `GameAssembly.dll` (~78 MB) |
 | IL2CPP metadata | `<exe>_Data/il2cpp_data/Metadata/global-metadata.dat` |
 | Addressables catalog | `<exe>_Data/StreamingAssets/aa/catalog.bin` (Addressables 2.3.7) |
@@ -47,7 +45,7 @@ The toolkit collapses into two commands:
                      ├── 3. font-swap           (atlas + bundle + hidden font, uses logofont.bundle)
                      ├── 4. extract             (4,008 stories + 15 master bundles → extracted_data/)
                      ├── 5. bundle-cache        (LocalLow → <game>/AssetBundle)
-                     └── 6. deploy launcher     (rename pristine exe + drop launcher.exe)
+                     └── 6. deploy launcher     (drop launcher.exe as メルストM_chs.exe — original untouched)
 
        (translator edits values in place under extracted_data/)
 
@@ -99,9 +97,8 @@ workshop/
 ├── docs/
 │   ├── CRC_PATCH_GUIDE.md            (+ _zh-CN translation)
 │   ├── OFFLINE_MODE_GUIDE.md         (+ _zh-CN)
-│   ├── TEXT_EXTRACTION_GUIDE.md      (+ _zh-CN)
+│   ├── STORY_BUNDLE_GUIDE.md         (+ _zh-CN) story bundle decrypt + MemoryPack schema + repack
 │   ├── FONT_REPLACEMENT_GUIDE.md     (+ _zh-CN)
-│   ├── MEMORYPACK_SCHEMA_GUIDE.md    (+ _zh-CN) story bundle wire format
 │   ├── MASTERDATA_SCHEMA_GUIDE.md    (+ _zh-CN) all 15 master bundle schemas
 │   └── README_zh-CN.md               this file in 简体中文
 │
@@ -138,7 +135,7 @@ The only non-Python prerequisite for the patches themselves is **Il2CppDumper**,
 - [TextMeshPro package](https://docs.unity3d.com/Packages/com.unity.textmeshpro@3.0/manual/index.html) — required to bake the source font bundle in Unity
 - [Capstone disassembler](https://www.capstone-engine.org/) — used in the patch verification step
 - [IDA Pro](https://hex-rays.com/ida-pro) — used for x-ref work on the dumped binary (the `.i64` database lives next to `GameAssembly.dll`)
-- Per-guide details: [CRC](docs/CRC_PATCH_GUIDE.md#external-references), [offline](docs/OFFLINE_MODE_GUIDE.md#external-references), [text](docs/TEXT_EXTRACTION_GUIDE.md#external-references), [font](docs/FONT_REPLACEMENT_GUIDE.md#external-references)
+- Per-guide details: [CRC](docs/CRC_PATCH_GUIDE.md#external-references), [offline](docs/OFFLINE_MODE_GUIDE.md#external-references), [story](docs/STORY_BUNDLE_GUIDE.md#external-references), [font](docs/FONT_REPLACEMENT_GUIDE.md#external-references)
 
 ## Status
 
@@ -150,5 +147,4 @@ The only non-Python prerequisite for the patches themselves is **Il2CppDumper**,
 - [x] Offline boot end-to-end — 8 patch sites; title → home → story chapter list with no internet, no Steam
 - [x] Self-contained install — cache inside the game folder via NTFS junction
 - [x] Single-click launcher — bundles junction setup into the EXE (CMake-built, MSVC + MinGW)
-- [ ] Path redirection so a translation build can ship as a side-by-side install
 - [ ] Translation memory + LLM pipeline for all 4,000+ stories

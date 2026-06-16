@@ -41,16 +41,6 @@ Three copies on disk; only the first is sampled at runtime (verified by direct o
 
 12 materials in the bundle (`RocknRollStd SDF (Story)`, `RocknRollOne (Brown Outline)`, etc.). Each `_MainTex` already points to one of the three atlases. Once the atlas pixels are rewritten, every material renders the new font.
 
-## Exploration route (how we got here)
-
-1. ProcMon: single 16 MB read from `resources.assets.resS` at offset 8,690,576 covers both title and story renders → atlas is shared.
-2. Story works after swapping the bundle font, menu does not → menu samples the shared atlas with a **stale char → glyph-rect mapping**.
-3. Grep bytes `RocknRollStd SDF` across every game file:
-   - `resources.assets` — **2 hits**
-   - `sharedassets4.assets` — 8 hits (all materials, no font asset)
-   - `catalog.bin` — 6 hits (Addressables references)
-4. The two `resources.assets` hits = (a) Texture2D `m_Name`, (b) a fully-formed `TMP_FontAsset` MonoBehaviour UnityPy silently skipped because the MonoScript binding was unavailable. **That second hit IS the menu's mapping.**
-
 ## Patch strategy — three orthogonal patches, all required
 
 ### Patch A — atlas pixels in `resources.assets.resS`
@@ -65,7 +55,7 @@ Also overwrite both 16 MB slots inside the bundle's `.resS` with the new atlas b
 
 **`m_FaceInfo` preservation is critical.** The UI was designed against original `m_PointSize = 32` and `m_LineHeight = 64.0` (2× PointSize). A freshly-baked TMP font (e.g. LogoSCLongZhuTi) has TTF-natural `m_LineHeight ≈ 39.68` (~1.24× PointSize). Transplanting that squishes every multi-line dialogue/menu box and causes line overlap. The current script's `transplant_keys_into` enumerates keys to copy and asserts `m_FaceInfo` is not in the list.
 
-**Corollary: bake the source font at `samplingPointSize = 32`** — same as the original `m_FaceInfo.m_PointSize`. TMP renders each glyph as `quadSize = glyphRect × requestedFontSize / m_FaceInfo.m_PointSize`. If the glyph table is baked at 28pt but the preserved `m_FaceInfo.m_PointSize` is 32, every glyph displays at 28/32 ≈ **87.5%** of the intended size — text looks visibly smaller than the original Japanese build. Sampling at 32 makes glyph rects line up with the runtime scale. Atlas character ceiling at 32pt is ~8,800 vs ~10,631 at 28pt, so the charset has to be trimmed accordingly (see Step 2).
+**Corollary: bake the source font at `samplingPointSize = 32`** — same as the original `m_FaceInfo.m_PointSize`. TMP renders each glyph as `quadSize = glyphRect × requestedFontSize / m_FaceInfo.m_PointSize`. If the glyph table is baked at 28pt but the preserved `m_FaceInfo.m_PointSize` is 32, every glyph displays at 28/32 ≈ **87.5%** of the intended size. Sampling at 32 makes glyph rects line up with the runtime scale. Atlas character ceiling at 32pt is ~8,800 vs ~10,631 at 28pt, so the charset has to be trimmed accordingly.
 
 ### Patch C — hidden font asset in `resources.assets` ⚠️
 
@@ -81,14 +71,12 @@ Ends up modifying ~100 KB of glyph rect / metrics data. Structure, PPtr referenc
 
 Result: both font assets point into the same atlas positions, atlas has new pixels at those positions, both renderers display the new font.
 
-## Reproduce
+## Apply
 
 Prereqs:
-- A built TMP font bundle (e.g. `logofont.bundle`) with one `TMP_FontAsset` MonoBehaviour + one 4096×4096 Alpha8 SDF atlas Texture2D. **Baking this bundle is the only manual Unity Editor step** — see [Building the source font bundle](#building-the-source-font-bundle) below.
+- A built TMP font bundle (e.g. `logofont.bundle`) with one `TMP_FontAsset` MonoBehaviour + one 4096×4096 Alpha8 SDF atlas Texture2D. The repo ships a prebuilt `logofont.bundle` at the root — build a different one only if you need a different source TTF or character set (see [Building the source font bundle](#building-the-source-font-bundle)).
 - CRC patch applied.
 - `.bak` of `84ece16f...bundle`, `resources.assets`, `resources.assets.resS` (the swap script auto-creates them if missing).
-
-Applying:
 
 ```bash
 uv run -m mercstoria font-swap "<path>/logofont.bundle"
@@ -98,41 +86,22 @@ Handles A + B + C; mirrors to `$MERCSTORIA_MIRROR_DIR` (defaults to `D:\mercstor
 
 ## Building the source font bundle
 
-The font swap consumes a Unity asset bundle containing one `TMP_FontAsset` MonoBehaviour and one 4096×4096 Alpha8 SDF atlas Texture2D. There's no automated path to bake this — Unity Editor is the supported way to produce a TMP font asset, and SDF atlas generation requires the Editor's TMP package. Below is the full procedure starting from a vanilla Unity install.
+The font swap consumes a Unity asset bundle containing one `TMP_FontAsset` MonoBehaviour and one 4096×4096 Alpha8 SDF atlas Texture2D. There is no automated path to bake this — Unity Editor is the supported way to produce a TMP font asset, and SDF atlas generation requires the Editor's TMP package.
 
-### What you need
+Two non-negotiable parameters when baking, derived from the patch strategy above:
 
-| Tool | Version / source | Why |
-|---|---|---|
-| [Unity Hub](https://unity.com/download) | latest | install + license the Editor |
-| Unity Editor | **6000.0.58f2** | matches the game; same TMP package version → identical typetree shape |
-| [TextMeshPro](https://docs.unity3d.com/Packages/com.unity.textmeshpro@3.0/manual/index.html) package | bundled with 6000.x as `com.unity.ugui` | `TMP_FontAsset.CreateFontAsset` + `TryAddCharacters` API |
-| Source font | any `.ttf` / `.otf` covering your target script | e.g. [LogoSC Long Zhu](https://github.com/atelier-anchor/smiley-sans) for CJK, [Noto Sans](https://fonts.google.com/noto) for everything |
-| `target_chars.txt` | single line of literal characters (UTF-8) | the character set to bake into the atlas |
+- **Unity 6000.0.58f2** — the in-place byte-diff in Patch C only works because the source and target MonoBehaviour layouts are bit-identical, which depends on the exact TMP package version shipped with this Unity version.
+- **`samplingPointSize = 32`** — must equal the preserved `m_FaceInfo.m_PointSize`, otherwise glyphs render at the wrong scale (see Patch B).
 
-The Unity version is non-negotiable. The exact MonoBehaviour layout depends on the TMP package version — baking with TMP 4.x produces a typetree with a different field order, and the in-place `resources.assets` byte-diff in Patch C only works because the layouts are bit-identical between source and target.
+Bake an empty `TMP_FontAsset` via `TMP_FontAsset.CreateFontAsset(font, samplingPointSize: 32, atlasPadding: 5, GlyphRenderMode.SDFAA_HINTED, atlasWidth: 4096, atlasHeight: 4096, ...)`, populate it with `TryAddCharacters(targetChars)`, freeze `atlasPopulationMode = Static`, tag the asset + atlas texture for the same `assetBundleName = "logofont.bundle"`, and `BuildPipeline.BuildAssetBundles(..., BuildAssetBundleOptions.ChunkBasedCompression, BuildTarget.StandaloneWindows64)`. References:
 
-### Step 1: create the project
+- [TextMeshPro package docs](https://docs.unity3d.com/Packages/com.unity.textmeshpro@3.0/manual/index.html) — `TMP_FontAsset.CreateFontAsset`, `TryAddCharacters`, `HasCharacters`
+- [Font Asset Creator workflow](https://docs.unity3d.com/Packages/com.unity.textmeshpro@3.0/manual/FontAssetsCreator.html) — Editor GUI alternative
+- [Unity AssetBundle workflow](https://docs.unity3d.com/Manual/AssetBundles-Workflow.html) — building a `StandaloneWindows64` LZ4 bundle
 
-1. **Unity Hub → New project** → **3D (Built-In Render Pipeline)** template.
-2. Pick **6000.0.58f2** as the editor version. Earlier 6000.x builds *might* work but the patch RVAs were derived against 0.58f2 — don't deviate without re-verifying.
-3. Project name: anything ASCII. Avoid Japanese characters in the path — TMP's font baker has historically had issues with non-ASCII paths.
-4. After it opens: **Window → TextMeshPro → Import TMP Essential Resources**. Required for the default shader and dynamic atlas materials.
+### Character set
 
-### Step 2: drop in the font and character set
-
-Create the following under `Assets/`:
-
-```
-Assets/
-├── <your-font>.ttf                 source font, copied in
-├── target_chars.txt                literal characters to bake (single line)
-├── Editor/
-│   └── RegenAndBuildFont.cs        the bake script (below)
-└── AssetBundles/                   output goes here (created by the script)
-```
-
-`target_chars.txt` is a single line of literal characters (UTF-8, no separators). Generated by [`scripts/export_chars.py`](../scripts/export_chars.py) (CLI: `mercstoria export-chars`) from authoritative source lists in `tools/`. The script splits its sources into two classes:
+`target_chars.txt` is a single line of literal characters (UTF-8, no separators) consumed by `TryAddCharacters`. Generated by [`scripts/export_chars.py`](../scripts/export_chars.py) (CLI: `mercstoria export-chars`) from authoritative source lists in `tools/`. The script splits its sources into two classes:
 
 - **REQUIRED** (never trimmed): ASCII ∪ CJK punctuation ∪ hiragana ∪ katakana ∪ fullwidth/halfwidth symbols ∪ Joyo 2,136 (JP) ∪ **通用规范汉字表一级字 3,500** ∪ every codepoint in any `translate_*.py` at the repo root ∪ (with `--include-corpus`) chars in `extracted_data/**/*.json`.
 - **FILL** (capped at remaining headroom, added in 7000hanzi frequency order): 通用规范汉字表二级字 3,000 ∪ the qweyouke "7000" SC list.
@@ -141,149 +110,9 @@ The previous frequency-only cap silently dropped ~499 L1 chars (赛 / 翼 / 羹 
 
 **Important:** anything used in a CN translation but NOT in the atlas renders as a random glyph fragment at runtime (Patch A wipes the atlas pixel at that glyph's original rect, but Patch C keeps the rect pointing there). The translation-file scan exists for exactly this reason — add new `translate_*.py` files at the repo root and re-run `mercstoria export-chars` whenever the translation set grows.
 
-The canonical glyph-lookup reference is [TMP_FontAsset.HasCharacters](https://docs.unity3d.com/Packages/com.unity.textmeshpro@3.0/api/TMPro.TMP_FontAsset.html#TMPro_TMP_FontAsset_HasCharacters_System_String_).
+### Verifying the bundle
 
-### Step 3: write the bake script
-
-Paste into `Assets/Editor/RegenAndBuildFont.cs`:
-
-```csharp
-using System.IO;
-using System.Linq;
-using UnityEditor;
-using UnityEngine;
-using TMPro;
-
-public static class RegenAndBuildFont
-{
-    // Invoked via: Unity.exe -batchmode -executeMethod RegenAndBuildFont.RegenAndBuild
-    public static void RegenAndBuild()
-    {
-        // ----- 1. Locate the source TTF dropped into Assets/ ------------------
-        var ttfPath = Directory
-            .GetFiles("Assets", "*.ttf", SearchOption.TopDirectoryOnly)
-            .FirstOrDefault();
-        if (ttfPath == null)
-            throw new System.Exception("No .ttf found in Assets/");
-
-        var ttf = AssetDatabase.LoadAssetAtPath<Font>(ttfPath);
-        if (ttf == null)
-            throw new System.Exception($"Failed to load font at {ttfPath}");
-
-        // ----- 2. Bake the empty font asset -----------------------------------
-        // These constants must match the game's original RocknRollStd SDF or
-        // the byte-diff Patch C will not line up.
-        // samplingPointSize MUST equal the original m_FaceInfo.m_PointSize (32);
-        // baking at 28 makes runtime glyphs render ~12.5% smaller because we
-        // preserve the original m_FaceInfo.
-        var fontAsset = TMP_FontAsset.CreateFontAsset(
-            font:             ttf,
-            samplingPointSize: 32,
-            atlasPadding:      5,
-            renderMode:        GlyphRenderMode.SDFAA_HINTED,
-            atlasWidth:        4096,
-            atlasHeight:       4096,
-            atlasPopulationMode: AtlasPopulationMode.Dynamic,
-            enableMultiAtlasSupport: false);
-
-        // ----- 3. Add the target characters -----------------------------------
-        // target_chars.txt is plain UTF-8: literal characters, no separators.
-        // Strip incidental whitespace (CR/LF/TAB/space) so the bake counter
-        // matches the file's logical char count.
-        var charSet = new string(
-            File.ReadAllText("Assets/target_chars.txt")
-                .Where(c => !char.IsWhiteSpace(c))
-                .ToArray());
-        if (!fontAsset.TryAddCharacters(charSet, out string missing))
-            Debug.LogWarning($"[bake] missing {missing.Length} chars: {missing}");
-
-        // ----- 4. Freeze the atlas as Static so the game's runtime trusts it --
-        fontAsset.atlasPopulationMode = AtlasPopulationMode.Static;
-        EditorUtility.SetDirty(fontAsset);
-        AssetDatabase.CreateAsset(fontAsset, "Assets/logofont.asset");
-        AssetDatabase.SaveAssets();
-
-        // ----- 5. Tag for asset-bundle build ----------------------------------
-        var importer = AssetImporter.GetAtPath("Assets/logofont.asset");
-        importer.assetBundleName = "logofont.bundle";
-
-        var atlasTex = fontAsset.atlasTextures.FirstOrDefault();
-        if (atlasTex != null)
-        {
-            var atlasPath = AssetDatabase.GetAssetPath(atlasTex);
-            AssetImporter.GetAtPath(atlasPath).assetBundleName = "logofont.bundle";
-        }
-
-        // ----- 6. Build the bundle in StandaloneWindows64 format --------------
-        Directory.CreateDirectory("Assets/AssetBundles");
-        BuildPipeline.BuildAssetBundles(
-            "Assets/AssetBundles",
-            BuildAssetBundleOptions.ChunkBasedCompression, // → LZ4, matches game
-            BuildTarget.StandaloneWindows64);
-
-        Debug.Log("[bake] OK — Assets/AssetBundles/logofont.bundle");
-    }
-}
-```
-
-### Step 4: run the build
-
-Headless from a shell:
-
-```powershell
-& "C:\Program Files\Unity\Hub\Editor\6000.0.58f2\Editor\Unity.exe" `
-    -batchmode -nographics -quit `
-    -projectPath "<absolute path to project>" `
-    -executeMethod RegenAndBuildFont.RegenAndBuild `
-    -logFile build.log
-```
-
-Or just hit **Assets → Build → RegenAndBuildFont.RegenAndBuild** from inside the Editor (after wiring a custom menu, or by calling it from a one-shot Editor menu item).
-
-Build output: `<project>/Assets/AssetBundles/logofont.bundle`. This is what `mercstoria font-swap` consumes.
-
-### Step 5: verify the bundle
-
-Before running `mercstoria font-swap`, sanity-check the bake:
-
-```bash
-uv run python -c "
-import UnityPy
-env = UnityPy.load(r'<project>/Assets/AssetBundles/logofont.bundle')
-fonts   = [o for o in env.objects if o.type.name == 'MonoBehaviour']
-atlases = [o for o in env.objects if o.type.name == 'Texture2D']
-print(f'fonts: {len(fonts)}, atlases: {len(atlases)}')
-for f in fonts:
-    tt = f.read_typetree()
-    if 'm_CharacterTable' in tt:
-        fi = tt.get('m_FaceInfo', {})
-        print(f'  chars={len(tt[\"m_CharacterTable\"])}'
-              f' glyphs={len(tt[\"m_GlyphTable\"])}'
-              f' line_height={fi.get(\"m_LineHeight\")}'
-              f' point_size={fi.get(\"m_PointSize\")}')
-for t in atlases:
-    d = t.read()
-    print(f'  atlas {d.m_Width}x{d.m_Height} fmt={d.m_TextureFormat}')
-"
-```
-
-Expected:
-
-```
-fonts: 1, atlases: 1
-  chars≈7800 glyphs≈7800 line_height=39.something point_size=32
-  atlas 4096x4096 fmt=Alpha8
-```
-
-If `chars` is much smaller than expected, your `target_chars.txt` failed `TryAddCharacters` for most codepoints — usually because the source TTF doesn't have them. Pick a font with wider coverage or split into multiple `TryAddCharacters` calls and accept a smaller subset.
-
-### Step 6: swap it in
-
-```bash
-uv run -m mercstoria font-swap "<project>/Assets/AssetBundles/logofont.bundle"
-```
-
-This handles A + B + C automatically. Launch the game; verify both story dialogue (Patch B) and the title screen / chapter list (Patch C) render with the new font.
+Before running `font-swap`, check the bake reports the expected shape with UnityPy: 1 `MonoBehaviour` + 1 `Texture2D`, `len(m_CharacterTable) ≈ len(m_GlyphTable) ≈ 7800`, `m_FaceInfo.m_PointSize == 32`, atlas `4096×4096 Alpha8`. If `m_CharacterTable` is much smaller than expected, the source TTF is missing those glyphs — pick a wider-coverage font.
 
 ## What did NOT work
 
@@ -299,11 +128,14 @@ This handles A + B + C automatically. Launch the game; verify both story dialogu
 | Path | Purpose |
 |---|---|
 | `scripts/font_swap.py` | Universal swap — Patches A + B + C from one source bundle (`mercstoria font-swap <bundle>`) |
+| `scripts/export_chars.py` | Build `target_chars.txt` for the TMP bake (`mercstoria export-chars`) |
+| `logofont.bundle` (repo root) | Prebuilt source font bundle, ready to feed `font-swap` |
 
 ## External references
 
 - [UnityPy](https://github.com/K0lb3/UnityPy) — Unity asset reader/writer; powers Patches B and C
 - [TextMeshPro package docs](https://docs.unity3d.com/Packages/com.unity.textmeshpro@3.0/manual/index.html) — `TMP_FontAsset.CreateFontAsset`, `TryAddCharacters`
-- [Font Asset Creator workflow](https://docs.unity3d.com/Packages/com.unity.textmeshpro@3.0/manual/FontAssetsCreator.html) — Unity Editor GUI alternative to the bake script
+- [Font Asset Creator workflow](https://docs.unity3d.com/Packages/com.unity.textmeshpro@3.0/manual/FontAssetsCreator.html) — Unity Editor GUI alternative
+- [Unity AssetBundle workflow](https://docs.unity3d.com/Manual/AssetBundles-Workflow.html) — building the `StandaloneWindows64` LZ4 bundle the swap consumes
 - [Noto fonts](https://fonts.google.com/noto) — free OFL-licensed CJK / Latin / Arabic / etc. coverage
 - [Smiley Sans / LogoSC](https://github.com/atelier-anchor/smiley-sans) — wide-coverage CJK font used in our reference build

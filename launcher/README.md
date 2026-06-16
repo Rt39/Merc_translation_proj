@@ -6,8 +6,13 @@ Self-contained Windows launcher that replaces what used to be a manual
 `mklink /J` setup step. On double-click it creates an NTFS mount-point
 junction from
 `%LocalLow%/jp_co_happyelements/メルストM/AssetBundle` to the bundled
-`<install>/AssetBundle/`, then starts `メルストM_app.exe`. Idempotent — second
-run sees the junction and just launches.
+`<install>/AssetBundle/`, then chains into the original `メルストM.exe`.
+Idempotent — second run sees the junction and just launches.
+
+The launcher is a **drop-in companion** to the original game exe, not a
+replacement: original `メルストM.exe` and `メルストM_Data/` stay untouched
+so a Steam "Verify integrity" pass still works on the unmodified files.
+Users double-click `メルストM_chs.exe` to launch the translated build.
 
 See [`../docs/OFFLINE_MODE_GUIDE.md`](../docs/OFFLINE_MODE_GUIDE.md) for why
 this junction is needed.
@@ -54,26 +59,21 @@ so the Japanese L"..." literals compile correctly under both toolchains.
 
 ## Deploy to a game folder
 
-Rename the original exe + data folder, then drop the launcher in their place:
+Just drop `launcher.exe` into the game folder as `メルストM_chs.exe`. The
+original game exe is left in place:
 
 ```powershell
 $dest = "<game install folder>"
-Rename-Item -LiteralPath "$dest\メルストM.exe"      -NewName "メルストM_app.exe"
-Rename-Item -LiteralPath "$dest\メルストM_Data"     -NewName "メルストM_app_Data"
-Copy-Item   -LiteralPath "build\Release\launcher.exe" -Destination "$dest\メルストM.exe"
+Copy-Item -LiteralPath "build\Release\launcher.exe" -Destination "$dest\メルストM_chs.exe"
 ```
 
-Unity derives the `_Data` folder name from the exe basename — renaming the
-exe to `メルストM_app.exe` makes it look for `メルストM_app_Data/`, which is
-why the data folder rename is mandatory.
+`mercstoria setup` does this automatically as its last step.
 
 ## Revert
 
 ```powershell
 $dest = "<game install folder>"
-Remove-Item -LiteralPath "$dest\メルストM.exe"
-Rename-Item -LiteralPath "$dest\メルストM_app.exe"   -NewName "メルストM.exe"
-Rename-Item -LiteralPath "$dest\メルストM_app_Data"  -NewName "メルストM_Data"
+Remove-Item -LiteralPath "$dest\メルストM_chs.exe"
 ```
 
 The junction at `%LocalLow%/.../AssetBundle` is left untouched; if you want

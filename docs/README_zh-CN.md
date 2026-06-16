@@ -1,25 +1,23 @@
-# Merc Storia（メルクストーリア） — 翻译项目
+# 梅露可物语（メルクストーリア） — 翻译项目
 
-完整工具链，用于将 **メルクストーリア - 癒術士と心の旋律 -** Steam 版本翻译为非日语。游戏自身不带 i18n，本仓库的每一步都是逆向工程得来的。
+完整工具链，用于将 **梅露可物语 - 愈术师与心之旋律 -（メルクストーリア - 癒術士と心の旋律 -）** Steam 版本翻译为非日语。游戏自身不带 i18n，本仓库的每一步都是逆向工程得来的。
 
 五项相互独立的技术成果，合在一起即可完成完整翻译：
 
 1. **CRC 绕过** —— 4 处 `xor edx, edx` 修补在 `GameAssembly.dll` 中，修改后的 bundle 不会再被静默重下。见 [`CRC_PATCH_GUIDE_zh-CN.md`](CRC_PATCH_GUIDE_zh-CN.md)。
-2. **文本解密 / 提取 / 重打包** —— 大约 4,000 个剧情 bundle 的完整管线（AES-256-CBC + MemoryPack）。见 [`TEXT_EXTRACTION_GUIDE_zh-CN.md`](TEXT_EXTRACTION_GUIDE_zh-CN.md)。
+2. **文本解密 / 提取 / 重打包** —— 大约 4,000 个剧情 bundle 的完整管线（AES-256-CBC + MemoryPack）。见 [`STORY_BUNDLE_GUIDE_zh-CN.md`](STORY_BUNDLE_GUIDE_zh-CN.md)。
 3. **字体替换** —— 同时修补字体实际所在的三个物理位置，TMP 字体可任意替换。见 [`FONT_REPLACEMENT_GUIDE_zh-CN.md`](FONT_REPLACEMENT_GUIDE_zh-CN.md)。
 4. **离线模式** —— 8 处修补（Steam 绕过 + Cysharp 证书跳过 + 纯文件读取 GetAsync），让安装包无需联网、无需 Steam。见 [`OFFLINE_MODE_GUIDE_zh-CN.md`](OFFLINE_MODE_GUIDE_zh-CN.md)。
 5. **自包含启动器** —— 替换 `メルストM.exe` 的单击启动器，把 NTFS junction 创建步骤打进了 EXE 自身。见 [`../launcher/README_zh-CN.md`](../launcher/README_zh-CN.md)。
 
 ## 游戏环境（基准）
 
-五个组件都引用本节，不再重复。
-
 | 项目 | 取值 |
 |---|---|
 | 引擎 | Unity 6000.0.58f2，IL2CPP，Windows x64 |
 | 平台 | Steam |
 | 游戏目录 | `<Steam>/steamapps/common/メルクストーリア - 癒術士と心の旋律 -/` |
-| 启动器 | `メルストM.exe` + `メルストM_Data/`（部署启动器后变为 `メルストM_app.exe` + `メルストM_app_Data/`） |
+| 启动器 | `メルストM.exe` + `メルストM_Data/`（保持不动；汉化版会在旁边新增 `メルストM_chs.exe`） |
 | IL2CPP 二进制 | `GameAssembly.dll`（约 78 MB） |
 | IL2CPP 元数据 | `<exe>_Data/il2cpp_data/Metadata/global-metadata.dat` |
 | Addressables 目录 | `<exe>_Data/StreamingAssets/aa/catalog.bin`（Addressables 2.3.7） |
@@ -45,7 +43,7 @@
                      ├── 3. font-swap           （atlas + bundle + 隐藏字体，复用 logofont.bundle）
                      ├── 4. extract             （4,008 剧情 + 15 master bundle → extracted_data/）
                      ├── 5. bundle-cache        （LocalLow → <game>/AssetBundle）
-                     └── 6. deploy launcher     （重命名原 exe，把 launcher.exe 放进游戏目录）
+                     └── 6. deploy launcher     （把 launcher.exe 复制为 メルストM_chs.exe，原版不动）
 
        （译者就地修改 extracted_data/ 下的 JSON）
 
@@ -95,9 +93,8 @@ workshop/
 ├── docs/
 │   ├── CRC_PATCH_GUIDE.md            （+ _zh-CN 译文）
 │   ├── OFFLINE_MODE_GUIDE.md         （+ _zh-CN）
-│   ├── TEXT_EXTRACTION_GUIDE.md      （+ _zh-CN）
+│   ├── STORY_BUNDLE_GUIDE.md         （+ _zh-CN）剧情 bundle 解密 + MemoryPack schema + 重打包
 │   ├── FONT_REPLACEMENT_GUIDE.md     （+ _zh-CN）
-│   ├── MEMORYPACK_SCHEMA_GUIDE.md    （+ _zh-CN）story bundle wire format
 │   ├── MASTERDATA_SCHEMA_GUIDE.md    （+ _zh-CN）全部 15 个 master bundle 的 schema
 │   └── README_zh-CN.md               本文件
 │
@@ -134,7 +131,7 @@ uv run -m mercstoria              # 显示完整子命令列表
 - [TextMeshPro 包](https://docs.unity3d.com/Packages/com.unity.textmeshpro@3.0/manual/index.html) —— 在 Unity 里烤源字体 bundle 必备
 - [Capstone 反汇编引擎](https://www.capstone-engine.org/) —— 修补验证步骤会用
 - [IDA Pro](https://hex-rays.com/ida-pro) —— 用来在 dump 出的二进制里做交叉引用
-- 各指南详细链接：[CRC](CRC_PATCH_GUIDE_zh-CN.md#外部链接)、[离线](OFFLINE_MODE_GUIDE_zh-CN.md#外部链接)、[文本](TEXT_EXTRACTION_GUIDE_zh-CN.md#外部链接)、[字体](FONT_REPLACEMENT_GUIDE_zh-CN.md#外部链接)
+- 各指南详细链接：[CRC](CRC_PATCH_GUIDE_zh-CN.md#外部链接)、[离线](OFFLINE_MODE_GUIDE_zh-CN.md#外部链接)、[剧情](STORY_BUNDLE_GUIDE_zh-CN.md#外部链接)、[字体](FONT_REPLACEMENT_GUIDE_zh-CN.md#外部链接)
 
 ## 进度
 
@@ -146,5 +143,4 @@ uv run -m mercstoria              # 显示完整子命令列表
 - [x] 离线启动端到端 —— 8 处修补点；无网无 Steam 即可到达 标题 → 主页 → 剧情章节列表
 - [x] 自包含安装 —— 缓存通过 NTFS junction 实际位于游戏目录内
 - [x] 单击启动器 —— junction 创建步骤打进了 EXE（CMake 构建，支持 MSVC + MinGW）
-- [ ] 路径重定向，使翻译版可与原版并行安装
 - [ ] 4,000+ 剧情的翻译记忆 + LLM 管线

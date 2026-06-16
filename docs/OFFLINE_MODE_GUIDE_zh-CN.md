@@ -102,29 +102,34 @@ uv run -m mercstoria verify-patches
 为此 15 GB 缓存必须**实际存在游戏目录内**。上面的修补只重定向了 CDN HTTP 路径。**Unity Addressables 运行时同样会直接在 `persistentDataPath` 下读写自己的缓存**（catalog.hash、下载的 bundle、完整性校验），这些代码路径深埋在 Addressables / ResourceManager 内部，**不**经过 `AssetBundleHttpClient.GetAsync`。把这些位点一个一个修补又脆又没尽头。
 
 所以我们在文件系统层做重定向：自包含启动器
-（`launcher/build/Release/launcher.exe`，作为 `メルストM.exe` 的替身）首次
+（`launcher/build/Release/launcher.exe`，作为 `メルストM_chs.exe` 部署在原版
+exe 旁边 —— 见 [`launcher/README_zh-CN.md`](../launcher/README_zh-CN.md)）首次
 运行时创建 NTFS junction，等价于：
 
 ```
 mklink /J "%USERPROFILE%\AppData\LocalLow\jp_co_happyelements\メルストM\AssetBundle" "<install>\AssetBundle"
 ```
 
-之后，`persistentDataPath\AssetBundle` 就是一个 reparse point，指向打包的 `<install>\AssetBundle\`。游戏自己的代码和 Unity 的 Addressables 运行时都会落到打包的缓存上 —— 它们都不知道路径上有 junction，也不在乎。启动器幂等：之后启动会发现 junction 已存在，直接转发到改名后的 `メルストM_app.exe`。
+之后，`persistentDataPath\AssetBundle` 就是一个 reparse point，指向打包的 `<install>\AssetBundle\`。游戏自己的代码和 Unity 的 Addressables 运行时都会落到打包的缓存上 —— 它们都不知道路径上有 junction，也不在乎。启动器幂等：之后启动会发现 junction 已存在，直接转发到原版 `メルストM.exe`。
 
 分发目录结构：
 
 ```
 <install>/
-  メルストM.exe             （启动器，作为替身）
-  メルストM_app.exe         （改名后的原 Unity player）
-  メルストM_app_Data/
+  メルストM.exe             （原版 Unity player，保持不动 —— Steam 验证完整性仍能通过）
+  メルストM_Data/           （保持不动）
+  メルストM_chs.exe         （启动器，由 `mercstoria setup` 部署到这里）
   GameAssembly.dll          （已修补）
   AssetBundle/              （打包的 15 GB 缓存）
     StandaloneWindows64/<Category>/...
   ...
 ```
 
-用户工作流：把文件夹拷到任何位置 → 双击 `メルストM.exe`。
+用户工作流：把文件夹拷到任何位置 → 双击 `メルストM_chs.exe`。
+
+（`メルストM.exe` 还在，但它**不会**打开原版日文游戏 —— `GameAssembly.dll`
+已经就地打补丁，`_chs.exe` 只是多了一层先建 junction 再转发的封装。Steam 的
+"验证游戏文件完整性"仍能在未修改的原版 exe + `_Data/` 上通过。）
 
 **支撑 junction 决定的诊断。** 不加 junction，procmon 抓到：
 
@@ -143,7 +148,7 @@ T+14s   约 80 个线程级联 Thread Exit；进程干净退出
 1. 应用 CRC + 离线修补。
 2. 断网（关 WiFi 或防火墙阻断游戏）。
 3. 完全退出 Steam 客户端。
-4. 启动 `メルストM.exe`（启动器首次运行时按需创建 junction，然后转发到真正的 player）。
+4. 启动 `メルストM_chs.exe`（启动器首次运行时按需创建 junction，然后转发到原版 `メルストM.exe`）。
 5. 预期：标题画面（"Merc StoriA" logo，"Game Start!" 按钮）→ Game Start → 主页菜单 → 底部 5 个 tab（Home / Story / Guild / Gallery / Park）都能渲染，立绘和本地化标签齐全。
 6. `netstat -ano | findstr <pid>` 应显示零个非环回连接。
 
@@ -153,11 +158,9 @@ T+14s   约 80 个线程级联 Thread Exit；进程干净退出
 
 - **只改公开的 2 参 / 4 参重载** —— 槽位太小，函数体溢出邻居。改 5 参，公开重载会转发过来。
 - **`GetAsync` 返回 `default(ValueTask<byte[]>)`（即 null 字节）** —— 上一版的 `C1`/`C2` 方案。目录刷新拿到 null 字节，把每个 locator 都丢掉，"通信に失敗"或黑屏。
-- **本地 HTTPS 服务器 + FlClash hosts 重定向** —— 端到端能跑，但需要额外进程和自签证书。
+- **本地 HTTPS 服务器** —— 端到端能跑，但需要额外进程和自签证书。
 - **hosts 文件修改 + Fiddler 反向代理** —— 要管理员；Fiddler 上游又会通过 hosts 解析造成环。
 - **WinINet / IE 代理** —— YAHH（rustls/hyper）不理它。
-- **FlClash PROCESS-NAME 规则把 メルストM.exe 路由到 Fiddler** —— 即使设置 `find-process-mode: always`，规则也抓不到 YAHH 的连接（在 Rust 线程中开启，进程归属路径不标准）。
-- **BepInEx / MelonLoader hook** —— 在 Unity 6000.x 上都坏了。
 
 ## 文件参考
 
@@ -165,8 +168,8 @@ T+14s   约 80 个线程级联 Thread Exit；进程干净退出
 |---|---|
 | `scripts/patch_offline.py` | 应用全部 8 处离线修补；幂等（`mercstoria patch-offline`） |
 | `scripts/verify_patches.py` | 只读校验（CRC + 离线）（`mercstoria verify-patches`） |
-| `scripts/bundle_cache.py` | 把 `%LocalLow%/.../AssetBundle` 拷到 `<game>/AssetBundle`（双语提示，默认中文）（`mercstoria bundle-cache`） |
-| `launcher/` | 自包含启动器（`メルストM.exe` 的替身），首次启动时创建 junction |
+| `scripts/bundle_cache.py` | 把 `%LocalLow%/.../AssetBundle` 拷到 `<game>/AssetBundle`（`mercstoria bundle-cache`） |
+| `launcher/` | 自包含启动器（部署为 `メルストM_chs.exe`，与原版 exe 并列），首次启动时创建 junction |
 | `il2cpp_output/dump.cs` | RVA 真值来源 |
 
 ## 外部链接

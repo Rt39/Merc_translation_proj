@@ -87,4 +87,4 @@ Easier in practice: run `mercstoria font-swap`. Without the CRC patch, the font 
 - [Capstone disassembler](https://www.capstone-engine.org/) — used by `scripts/patch_crc.py` to verify each patched site
 - [IDA Pro](https://hex-rays.com/ida-pro) — used for x-ref work on the dumped binary
 
-After this guide, modified asset bundles load without complaint. Continue with [`TEXT_EXTRACTION_GUIDE.md`](TEXT_EXTRACTION_GUIDE.md) or [`FONT_REPLACEMENT_GUIDE.md`](FONT_REPLACEMENT_GUIDE.md).
+After this guide, modified asset bundles load without complaint. Continue with [`STORY_BUNDLE_GUIDE.md`](STORY_BUNDLE_GUIDE.md) or [`FONT_REPLACEMENT_GUIDE.md`](FONT_REPLACEMENT_GUIDE.md).
