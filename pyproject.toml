@@ -10,5 +10,6 @@ dependencies = [
     "lz4>=4.4.5",
     "numpy>=2.4.6",
     "pillow>=12.2.0",
+    "tqdm>=4.66.0",
     "unitypy>=1.25.0",
 ]

@@ -149,7 +149,10 @@ JSON,新 IV 加密,写出 `UnityFS(lz4)` bundle。只重打 JSON 自上次 repac
 译文想多长多长。
 
 **D. Deploy**。`mercstoria deploy` 把 `repacked_bundles/` 拷进 live cache
-(自动优先 `<game>/AssetBundle`,其次 LocalLow),原文件备份到 `*.bak`。
+(自动优先 `<game>/AssetBundle`,其次 LocalLow)。每个被替换的原文件按相同的
+相对路径镜像到旁边的 `AssetBundle_old/` 树下。回滚:把 `AssetBundle_old/`
+覆盖回 `AssetBundle/`;最终化:直接删 `AssetBundle_old/`。每个文件的第一份
+副本就是原始版本 —— 之后再 deploy 永远不会覆盖已存在的备份。
 
 ## 最终状态(2026-06-17)
 

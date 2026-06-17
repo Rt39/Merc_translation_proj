@@ -2,8 +2,14 @@
 
 Used after `mercstoria repack` produces translated bundles
 under `repacked_bundles/{story,misc}/`. This script overwrites the live
-cache copies and keeps a `.bak` of each replaced original so a rollback
-is one `shutil.copy2` away.
+cache copies. Each replaced original is mirrored, in the same relative
+layout, under a sibling `AssetBundle_old/` tree alongside the live
+`AssetBundle/`. Rolling back means copying that tree back over the live
+one; deleting it discards the originals in one shot.
+
+Backup invariant: a file under `AssetBundle_old/` is the **pristine
+original** the very first time it was overwritten. Subsequent deploys
+NEVER touch it — re-running deploy keeps the first-seen original intact.
 
 Layout decision (post-launcher):
 
@@ -35,6 +41,8 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from tqdm import tqdm
+
 from mercstoria import config as cfg
 
 cfg.enable_utf8_stdout()
@@ -47,8 +55,8 @@ REPACKED_STORY = _HERE / "repacked_bundles" / "story"
 REPACKED_MISC  = _HERE / "repacked_bundles" / "misc"
 
 
-def _resolve_cache_root(target: str | None) -> Path:
-    """Pick the cache root we'll write into.
+def _resolve_cache_root(target: str | None) -> tuple[Path, Path]:
+    """Pick the cache root we'll write into, plus its backup mirror root.
 
     `target` is the user's --target flag:
         "auto"      (default): prefer <game>/AssetBundle if it has the
@@ -57,29 +65,37 @@ def _resolve_cache_root(target: str | None) -> Path:
         "game"      force the game-folder location.
         "persistent" force the LocalLow location.
 
-    Returns the resolved `AssetBundle/StandaloneWindows64` directory.
+    Returns (`AssetBundle/StandaloneWindows64` directory,
+             `AssetBundle_old/StandaloneWindows64` mirror directory).
     """
     game_root    = cfg.game_dir() / "AssetBundle" / "StandaloneWindows64"
     persist_root = cfg.cache_root()
 
     if target == "game":
-        return game_root
-    if target == "persistent":
-        return persist_root
-    # auto:
-    if game_root.is_dir():
-        return game_root
-    return persist_root
+        live = game_root
+    elif target == "persistent":
+        live = persist_root
+    elif game_root.is_dir():
+        live = game_root
+    else:
+        live = persist_root
+
+    # AssetBundle_old/ sits alongside AssetBundle/ — same parent, mirrored
+    # subtree. So <root>/AssetBundle/StandaloneWindows64/<rel> backs up to
+    # <root>/AssetBundle_old/StandaloneWindows64/<rel>.
+    backup_root = live.parent.parent / "AssetBundle_old" / "StandaloneWindows64"
+    return live, backup_root
 
 
-def deploy(src_dir: Path, dst_dir: Path, label: str) -> int:
+def deploy(src_dir: Path, dst_dir: Path, backup_dir: Path, label: str) -> int:
     """Copy every bundle in `src_dir` over the matching name in `dst_dir`.
 
     Idempotency / safety:
         * If `src_dir` doesn't exist, skip silently (translator might only
           have repacked one of {story, misc}).
-        * Per file, back up an existing destination to `<dst>.bak` once —
-          subsequent runs don't clobber the original .bak.
+        * Per file, mirror an existing destination into `backup_dir/<name>`
+          ONCE — if the backup already exists it is **never** overwritten
+          (the first copy is the pristine original).
         * `shutil.copy2` preserves mtime so re-bundling later sees stable
           timestamps.
 
@@ -90,12 +106,14 @@ def deploy(src_dir: Path, dst_dir: Path, label: str) -> int:
         return 0
 
     dst_dir.mkdir(parents=True, exist_ok=True)
+    backup_dir.mkdir(parents=True, exist_ok=True)
 
+    files = sorted(os.listdir(src_dir))
     count = 0
-    for fname in sorted(os.listdir(src_dir)):
+    for fname in tqdm(files, desc=f"deploy-{label}", unit="bundle"):
         src = src_dir / fname
         dst = dst_dir / fname
-        bak = dst.with_suffix(dst.suffix + ".bak")
+        bak = backup_dir / fname
         if dst.exists() and not bak.exists():
             shutil.copy2(dst, bak)
         shutil.copy2(src, dst)
@@ -115,15 +133,20 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    root = _resolve_cache_root(args.target)
+    root, backup_root = _resolve_cache_root(args.target)
     cache_story  = root / cfg.STORY_MASTERDATA_SUBDIR
     cache_master = root / cfg.MASTERDATA_SUBDIR
+    backup_story  = backup_root / cfg.STORY_MASTERDATA_SUBDIR
+    backup_master = backup_root / cfg.MASTERDATA_SUBDIR
 
     print(f"Deploy target ({args.target}): {root}")
-    n_story = deploy(REPACKED_STORY, cache_story,  "story")
-    n_misc  = deploy(REPACKED_MISC,  cache_master, "misc")
-    print(f"\nTotal: {n_story + n_misc} bundles. Originals backed up to *.bak "
-          f"next to each replaced file.")
+    print(f"Backup mirror:                 {backup_root}")
+    n_story = deploy(REPACKED_STORY, cache_story,  backup_story,  "story")
+    n_misc  = deploy(REPACKED_MISC,  cache_master, backup_master, "misc")
+    print(f"\nTotal: {n_story + n_misc} bundles. Originals mirrored under")
+    print(f"  {backup_root.parent}")
+    print("To roll back: copy AssetBundle_old/ over AssetBundle/.")
+    print("To finalize:  delete AssetBundle_old/.")
     return 0
 
 

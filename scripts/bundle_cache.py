@@ -36,6 +36,8 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from tqdm import tqdm
+
 from mercstoria import config as cfg
 
 cfg.enable_utf8_stdout()
@@ -56,9 +58,8 @@ _MESSAGES: dict[str, str] = {
     "scan_result":        "found {count:,} files, {bytes_gb:.2f} GB",
     "confirm":            "Continue? [Y/n]: ",
     "aborted":            "Aborted by user.",
-    "progress":           "[{done:>6,} / {total:,}]  {pct:5.1f}%  {gb:6.2f} GB  {speed_mb:6.1f} MB/s  {rel}",
     "skipped":            "Skipped {count} files that already exist with the same size.",
-    "done":               "\nDone: {copied:,} files, {bytes_gb:.2f} GB, in {seconds:.1f} s.",
+    "done":               "Done: {copied:,} files, {bytes_gb:.2f} GB, in {seconds:.1f} s.",
     "next_step":          "Next step: build and deploy the launcher -- see launcher/README.md.",
 }
 
@@ -104,58 +105,40 @@ def _copy_tree(src: Path, dst: Path, total_files: int, total_bytes: int) -> tupl
 
     Skips a file when the destination already exists with the same byte size
     (cheap idempotency: a partial / corrupt copy would have a different size).
-    The progress line is rewritten in place via \\r so the terminal shows one
-    moving status row.
     """
     copied_files = 0
     skipped = 0
     copied_bytes = 0
-    done_count = 0
-    start = time.monotonic()
 
-    for src_file in _walk_files(src):
-        rel = src_file.relative_to(src)
-        dst_file = dst / rel
+    bar = tqdm(total=total_bytes, unit="B", unit_scale=True, unit_divisor=1024,
+               desc="copy", smoothing=0.1)
+    try:
+        for src_file in _walk_files(src):
+            rel = src_file.relative_to(src)
+            dst_file = dst / rel
 
-        try:
-            src_size = src_file.stat().st_size
-        except OSError:
-            continue
-
-        done_count += 1
-
-        # Idempotency: skip files whose destination already matches in size.
-        if dst_file.exists():
             try:
-                if dst_file.stat().st_size == src_size:
-                    skipped += 1
-                    continue
+                src_size = src_file.stat().st_size
             except OSError:
-                pass
+                continue
 
-        dst_file.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src_file, dst_file)
-        copied_files += 1
-        copied_bytes += src_size
+            if dst_file.exists():
+                try:
+                    if dst_file.stat().st_size == src_size:
+                        skipped += 1
+                        bar.update(src_size)
+                        continue
+                except OSError:
+                    pass
 
-        # Throttle progress output to ~5 Hz so we don't spam the terminal.
-        elapsed = time.monotonic() - start
-        if done_count % 100 == 0 or done_count == total_files:
-            speed_mb = (copied_bytes / 1_048_576) / elapsed if elapsed > 0 else 0.0
-            pct = 100.0 * done_count / max(total_files, 1)
-            rel_short = str(rel)
-            if len(rel_short) > 60:
-                rel_short = "…" + rel_short[-59:]
-            line = _t("progress",
-                      done=done_count, total=total_files, pct=pct,
-                      gb=copied_bytes / 1_073_741_824,
-                      speed_mb=speed_mb, rel=rel_short)
-            # \r so the next print overwrites this one. Use a trailing space-
-            # pad so leftover characters from a longer previous filename don't
-            # bleed through.
-            print(f"\r{line:<140}", end="", flush=True)
+            dst_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_file, dst_file)
+            copied_files += 1
+            copied_bytes += src_size
+            bar.update(src_size)
+    finally:
+        bar.close()
 
-    print()  # finish the \r-ed progress line
     return copied_files, skipped, copied_bytes
 
 

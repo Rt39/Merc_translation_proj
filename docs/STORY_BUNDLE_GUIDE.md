@@ -163,8 +163,12 @@ plaintext is rewritten end-to-end, not spliced — so translated text can be
 any size.
 
 **D. Deploy.** `mercstoria deploy` copies `repacked_bundles/` onto the live
-cache (auto-prefers `<game>/AssetBundle` over LocalLow); originals are
-backed up to `*.bak`.
+cache (auto-prefers `<game>/AssetBundle` over LocalLow). Each replaced
+original is mirrored, in the same relative layout, under a sibling
+`AssetBundle_old/` tree. Roll back by copying `AssetBundle_old/` over
+`AssetBundle/`; finalize by deleting `AssetBundle_old/`. The first copy of
+each file is the pristine original — re-running deploy never overwrites
+an existing backup.
 
 ## Final state (2026-06-17)
 

@@ -34,14 +34,24 @@ _HERE = Path(__file__).resolve().parent
 
 
 def _run_script(script_name: str, argv: list[str]) -> None:
-    """Execute `scripts/<name>.py` as if invoked from the CLI."""
+    """Execute `scripts/<name>.py` as if invoked from the CLI.
+
+    Child scripts end with `sys.exit(main())`, so SystemExit fires on every
+    successful run. Swallow zero exits, propagate non-zero.
+    """
     target = _HERE / f"{script_name}.py"
     if not target.is_file():
         raise SystemExit(f"release: missing {target}")
     saved_argv = sys.argv
     try:
         sys.argv = [str(target), *argv]
-        runpy.run_path(str(target), run_name="__main__")
+        try:
+            runpy.run_path(str(target), run_name="__main__")
+        except SystemExit as e:
+            code = e.code
+            if code is None or code == 0:
+                return
+            raise SystemExit(f"release: step `{script_name}` failed (exit code {code}).")
     finally:
         sys.argv = saved_argv
 

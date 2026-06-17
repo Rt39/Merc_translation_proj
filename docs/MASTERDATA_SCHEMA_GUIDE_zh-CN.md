@@ -213,7 +213,8 @@ uv run -m mercstoria repack-misc
 # 改过的 JSON 才会被重新打包(走 fingerprint 比对,跟 story 一套机制)。
 
 uv run -m mercstoria deploy
-# 部署到 live cache,自动备份原 .bak。
+# 部署到 live cache。被替换的原文件按相同相对路径镜像到旁边的
+# AssetBundle_old/ 树下;第一份就是原版,之后再 deploy 不会覆盖已有备份。
 ```
 
 JSON 里**不要动** `_mc` / `_skipped` / `schema` / `bundle` /

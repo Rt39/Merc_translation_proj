@@ -225,7 +225,8 @@ uv run -m mercstoria repack-misc
 # the story path).
 
 uv run -m mercstoria deploy
-# Push to the live cache; the original is auto-backed-up to *.bak.
+# Push to the live cache. Replaced originals mirror to a sibling
+# AssetBundle_old/ tree; first copy wins, never overwritten.
 ```
 
 **Don't touch** the markers `_mc` / `_skipped` / `schema` / `bundle` /

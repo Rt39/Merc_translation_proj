@@ -66,6 +66,7 @@ import sys, struct, os, json, time, argparse, pickle, hashlib
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding as sym_padding
 import UnityPy
+from tqdm import tqdm
 
 import sys
 from pathlib import Path
@@ -561,9 +562,7 @@ def cmd_extract_story():
     index = {}
     t0 = time.time()
     written = 0
-    for i, fname in enumerate(files):
-        if i % 500 == 0:
-            print(f"  {i}/{len(files)} ({time.time() - t0:.1f}s, {written} written)")
+    for fname in tqdm(files, desc="extract-story", unit="bundle"):
         fpath = os.path.join(STORY_DIR, fname)
         try:
             name, enc = extract_textasset_raw(fpath)
@@ -644,16 +643,17 @@ def cmd_extract_misc():
 
     written = 0
     errors = []
-    for fname, asset_name in MISC_BUNDLES.items():
+    for fname, asset_name in tqdm(MISC_BUNDLES.items(), desc="extract-misc",
+                                  unit="bundle", total=len(MISC_BUNDLES)):
         fpath = os.path.join(MASTER_DIR, fname)
         if not os.path.exists(fpath):
-            print(f"  SKIP {fname}: not present in MasterData/")
+            tqdm.write(f"  SKIP {fname}: not present in MasterData/")
             continue
         try:
             name, enc = extract_textasset_raw(fpath)
             pt = decrypt(enc)
         except Exception as e:
-            print(f"  ERROR {fname}: {e}")
+            tqdm.write(f"  ERROR {fname}: {e}")
             continue
 
         full = FULL_SCHEMA_MASTER.get(fname)
@@ -667,11 +667,11 @@ def cmd_extract_misc():
                     while k < m and rt[k] == pt[k]: k += 1
                     errors.append({"file": fname,
                                    "error": f"round-trip diverges @ {k}/{len(pt)}"})
-                    print(f"  ERROR {asset_name}: round-trip diverged at byte {k}")
+                    tqdm.write(f"  ERROR {asset_name}: round-trip diverged at byte {k}")
                     continue
             except Exception as e:
                 errors.append({"file": fname, "error": str(e)})
-                print(f"  ERROR {asset_name}: {e}")
+                tqdm.write(f"  ERROR {asset_name}: {e}")
                 continue
             payload = {
                 "asset": asset_name,
@@ -686,7 +686,7 @@ def cmd_extract_misc():
                 os.path.join(MISC_OUT, f"{asset_name}.json"), payload, fps, key)
             written += 1
             n_rec = len(obj["Records"]) if obj["Records"] is not None else 0
-            print(f"  {asset_name:32s}  records={n_rec:5d}  (full schema)")
+            tqdm.write(f"  {asset_name:32s}  records={n_rec:5d}  (full schema)")
             continue
 
         items = find_all_strings(pt)
@@ -707,7 +707,7 @@ def cmd_extract_misc():
         write_json_with_fingerprint(
             os.path.join(MISC_OUT, f"{asset_name}.json"), payload, fps, key)
         written += 1
-        print(f"  {asset_name:32s}  total={len(items):5d}  jp={jp_count:5d}")
+        tqdm.write(f"  {asset_name:32s}  total={len(items):5d}  jp={jp_count:5d}")
 
     if errors:
         with open(os.path.join(MISC_OUT, "_errors.json"), 'w', encoding='utf-8') as f:
@@ -777,9 +777,9 @@ def cmd_repack_story(force: bool = False):
     skipped = 0
     failed = 0
     t0 = time.time()
-    for fname in sorted(os.listdir(STORY_OUT)):
-        if not fname.endswith(".json") or fname.startswith("_"):
-            continue
+    json_files = [f for f in sorted(os.listdir(STORY_OUT))
+                  if f.endswith(".json") and not f.startswith("_")]
+    for fname in tqdm(json_files, desc="repack-story", unit="json"):
         fpath = os.path.join(STORY_OUT, fname)
         key = f"story/{fname}"
         if not _is_modified(fpath, key, fps, force):
@@ -799,7 +799,7 @@ def cmd_repack_story(force: bool = False):
             repack_bundle(src, dst, lambda _orig, _b=new_pt: _b)
             repacked += 1
         except Exception as e:
-            print(f"  ERROR {bundle}: {e}")
+            tqdm.write(f"  ERROR {bundle}: {e}")
             failed += 1
 
     print(f"\nStory repack done in {time.time() - t0:.1f}s.")
@@ -830,9 +830,9 @@ def cmd_repack_misc(force: bool = False):
     repacked = 0
     skipped = 0
     failed = 0
-    for fname in sorted(os.listdir(MISC_OUT)):
-        if not fname.endswith(".json") or fname.startswith("_"):
-            continue
+    json_files = [f for f in sorted(os.listdir(MISC_OUT))
+                  if f.endswith(".json") and not f.startswith("_")]
+    for fname in tqdm(json_files, desc="repack-misc", unit="json"):
         fpath = os.path.join(MISC_OUT, fname)
         key = f"misc/{fname}"
         if not _is_modified(fpath, key, fps, force):
@@ -856,9 +856,9 @@ def cmd_repack_misc(force: bool = False):
             else:
                 repack_bundle(src, dst, lambda pt, _d=doc: apply_misc_json(pt, _d))
             repacked += 1
-            print(f"  {doc.get('asset', bundle)} -> {dst}")
+            tqdm.write(f"  {doc.get('asset', bundle)} -> {dst}")
         except Exception as e:
-            print(f"  ERROR {bundle}: {e}")
+            tqdm.write(f"  ERROR {bundle}: {e}")
             failed += 1
 
     print(f"\nMisc repack: {repacked} repacked, {skipped} skipped (unmodified), {failed} failed")
