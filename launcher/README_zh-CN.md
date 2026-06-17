@@ -86,3 +86,7 @@ Remove-Item -LiteralPath "$dest\メルストM_chs.exe"
   何 redistributable。
 * `ctest` 在 `%TEMP%` 上跑一遍 `create_junction`，验证 link 能正确解析后
   再清理掉。
+* 启动游戏时附加 `-force-d3d11`。Unity 6000.x 在某些 NVIDIA 驱动配置下会
+  fallback 到 OpenGL ES 3，导致最终章片尾 Timeline 字幕成块跳过（帧率与
+  `UnscaledGameTime` 推进对不上）。强制 D3D11 能让 cinematic 按设计节奏
+  播放。

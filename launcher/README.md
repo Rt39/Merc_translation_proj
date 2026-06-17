@@ -90,3 +90,8 @@ a reparse point does NOT delete the target.
   redistributable.
 * `ctest` exercises `create_junction` against `%TEMP%` and verifies the link
   resolves before tearing it down.
+* Spawns `メルストM.exe -force-d3d11`. Unity 6000.x falls back to OpenGL ES 3
+  on some NVIDIA driver configurations, which makes the final-chapter
+  Timeline cinematic skip subtitles in chunks (frame pacing mismatch with
+  `UnscaledGameTime`). Forcing D3D11 keeps the cinematic at the intended
+  cadence.

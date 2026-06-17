@@ -143,7 +143,7 @@ uv run -m mercstoria              # 显示完整子命令列表
 - [x] 字体替换 —— 中文 SDF 在所有画面上正确渲染
 - [x] 离线启动端到端 —— 8 处修补点；无网无 Steam 即可到达 标题 → 主页 → 剧情章节列表
 - [x] 自包含安装 —— 缓存通过 NTFS junction 实际位于游戏目录内
-- [x] 单击启动器 —— junction 创建步骤打进了 EXE（CMake 构建，支持 MSVC + MinGW）
+- [x] 单击启动器 —— junction 创建步骤打进了 EXE（CMake 构建，支持 MSVC + MinGW）；启动时强制 D3D11，避免在 NVIDIA fallback 到 OpenGL ES 3 的机器上最终章片尾字幕成块跳过
 - [x] 内嵌 UI 文本 —— 最终章片尾 Timeline 字幕通过 TypeTree 替换（4 个 bundle，44 行）
 - [ ] 图片提取与翻译 —— 找出游戏中含日文的美术资源并替换
 - [ ] 4,000+ 剧情的翻译记忆 + LLM 管线

@@ -146,8 +146,13 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE hp, LPWSTR cmdLine, int show) {
         die(L"" APP_EXE L" not found next to the launcher.\n"
             L"This launcher must sit in the same folder as the original game exe.", 0);
 
+    // Force D3D11 graphics backend. Unity 6000.x falls back to OpenGL ES 3 on
+    // some NVIDIA driver configurations, which makes the final-chapter
+    // PlayableDirector skip Timeline subtitles in chunks (frame pacing
+    // mismatch with UnscaledGameTime). -force-d3d11 keeps the renderer on
+    // D3D11 and the cinematic plays at the intended cadence.
     wchar_t cmd[BUF_CHARS];
-    swprintf_s(cmd, BUF_CHARS, L"\"%s\"", real_exe);
+    swprintf_s(cmd, BUF_CHARS, L"\"%s\" -force-d3d11", real_exe);
 
     STARTUPINFOW si = {0}; si.cb = sizeof(si);
     PROCESS_INFORMATION pi = {0};

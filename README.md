@@ -147,7 +147,7 @@ The only non-Python prerequisite for the patches themselves is **Il2CppDumper**,
 - [x] Font replacement — Chinese SDF rendering across all screens
 - [x] Offline boot end-to-end — 8 patch sites; title → home → story chapter list with no internet, no Steam
 - [x] Self-contained install — cache inside the game folder via NTFS junction
-- [x] Single-click launcher — bundles junction setup into the EXE (CMake-built, MSVC + MinGW)
+- [x] Single-click launcher — bundles junction setup into the EXE (CMake-built, MSVC + MinGW); forces D3D11 so the final-chapter cinematic plays at the intended cadence on NVIDIA GPUs that fall back to OpenGL ES 3
 - [x] Inline UI text — final-chapter Timeline cinematic dialogue swapped in via TypeTree (4 bundles, 44 strings)
 - [ ] Image extraction + translation — find in-game art that contains Japanese text and swap it
 - [ ] Translation memory + LLM pipeline for all 4,000+ stories
