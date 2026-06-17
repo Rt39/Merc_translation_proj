@@ -1,33 +1,21 @@
 """Deploy repacked bundles into the live cache.
 
 Used after `mercstoria repack` produces translated bundles
-under `repacked_bundles/{story,misc}/`. This script overwrites the live
-cache copies. Each replaced original is mirrored, in the same relative
-layout, under a sibling `AssetBundle_old/` tree alongside the live
-`AssetBundle/`. Rolling back means copying that tree back over the live
-one; deleting it discards the originals in one shot.
+under `repacked_bundles/{story,misc}/`. This script overwrites the
+game-folder cache copies. Each replaced original is mirrored, in the
+same relative layout, under a sibling `AssetBundle_old/` tree alongside
+the live `AssetBundle/`. Rolling back means copying that tree back over
+the live one; deleting it discards the originals in one shot.
 
 Backup invariant: a file under `AssetBundle_old/` is the **pristine
 original** the very first time it was overwritten. Subsequent deploys
 NEVER touch it — re-running deploy keeps the first-seen original intact.
 
-Layout decision (post-launcher):
-
-    Pristine install                Bundled / launcher-deployed install
-    -----------------               -----------------------------------
-    No `<game>/AssetBundle/`        `<game>/AssetBundle/` is the source
-    -> cache lives only at          of truth. Persistent path is a
-       `<persistent>/AssetBundle`      junction back into the game folder
-                                       (created by `launcher.exe` on first
-                                       run), so writing through either
-                                       location reaches the same file.
-
-We prefer the game-folder location when it exists because:
-  * after `bundle_cache.py`, that's the canonical home of the cache;
-  * if the user hasn't run the launcher yet, the persistent-path side
-    may not even have a `StoryMasterData/` subfolder.
-
-Override either side explicitly with --target.
+Target: always `<game>/AssetBundle/StandaloneWindows64`. Deploy refuses
+if the game-folder cache is empty — run `mercstoria bundle-cache` first.
+The LocalLow cache is no longer the rollback (`AssetBundle_old/` is);
+it can be purged for disk reclaim via `mercstoria release
+--purge-locallow-cache`.
 """
 from __future__ import annotations
 
@@ -55,36 +43,14 @@ REPACKED_STORY = _HERE / "repacked_bundles" / "story"
 REPACKED_MISC  = _HERE / "repacked_bundles" / "misc"
 
 
-def _resolve_cache_root(target: str | None) -> tuple[Path, Path]:
-    """Pick the cache root we'll write into, plus its backup mirror root.
+def _resolve_paths() -> tuple[Path, Path]:
+    """Return (live cache root, backup mirror root).
 
-    `target` is the user's --target flag:
-        "auto"      (default): prefer <game>/AssetBundle if it has the
-                    expected StandaloneWindows64 subtree; otherwise fall
-                    back to <persistent>/AssetBundle.
-        "game"      force the game-folder location.
-        "persistent" force the LocalLow location.
-
-    Returns (`AssetBundle/StandaloneWindows64` directory,
-             `AssetBundle_old/StandaloneWindows64` mirror directory).
+    Both rooted at `<game>/AssetBundle{,_old}/StandaloneWindows64`.
     """
-    game_root    = cfg.game_dir() / "AssetBundle" / "StandaloneWindows64"
-    persist_root = cfg.cache_root()
-
-    if target == "game":
-        live = game_root
-    elif target == "persistent":
-        live = persist_root
-    elif game_root.is_dir():
-        live = game_root
-    else:
-        live = persist_root
-
-    # AssetBundle_old/ sits alongside AssetBundle/ — same parent, mirrored
-    # subtree. So <root>/AssetBundle/StandaloneWindows64/<rel> backs up to
-    # <root>/AssetBundle_old/StandaloneWindows64/<rel>.
-    backup_root = live.parent.parent / "AssetBundle_old" / "StandaloneWindows64"
-    return live, backup_root
+    live = cfg.game_dir() / "AssetBundle" / "StandaloneWindows64"
+    backup = cfg.game_dir() / "AssetBundle_old" / "StandaloneWindows64"
+    return live, backup
 
 
 def deploy(src_dir: Path, dst_dir: Path, backup_dir: Path, label: str) -> int:
@@ -124,23 +90,25 @@ def deploy(src_dir: Path, dst_dir: Path, backup_dir: Path, label: str) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument(
-        "--target",
-        choices=("auto", "game", "persistent"),
-        default="auto",
-        help="Where to write. 'auto' = game folder if it has the expected "
-             "subtree, else %%LocalLow%%. 'game' / 'persistent' force one side.",
-    )
-    args = ap.parse_args()
+    ap.parse_args()
 
-    root, backup_root = _resolve_cache_root(args.target)
+    root, backup_root = _resolve_paths()
+    if not root.is_dir() or not any(root.iterdir()):
+        raise SystemExit(
+            f"deploy: {root} is empty or missing. Run\n"
+            f"    uv run -m mercstoria bundle-cache\n"
+            f"first so the cache lives in the game folder. Deploy refuses\n"
+            f"to write to LocalLow — that copy is reserved as the rollback\n"
+            f"snapshot."
+        )
+
     cache_story  = root / cfg.STORY_MASTERDATA_SUBDIR
     cache_master = root / cfg.MASTERDATA_SUBDIR
     backup_story  = backup_root / cfg.STORY_MASTERDATA_SUBDIR
     backup_master = backup_root / cfg.MASTERDATA_SUBDIR
 
-    print(f"Deploy target ({args.target}): {root}")
-    print(f"Backup mirror:                 {backup_root}")
+    print(f"Deploy target: {root}")
+    print(f"Backup mirror: {backup_root}")
     n_story = deploy(REPACKED_STORY, cache_story,  backup_story,  "story")
     n_misc  = deploy(REPACKED_MISC,  cache_master, backup_master, "misc")
     print(f"\nTotal: {n_story + n_misc} bundles. Originals mirrored under")

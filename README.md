@@ -89,8 +89,8 @@ workshop/
 │   ├── verify_patches.py       read-only check on both patch sets
 │   ├── extract_repack.py       extract / repack stories + 15 master bundles
 │   ├── check_roundtrip.py      sanity-check Reader/Writer on N story bundles
-│   ├── deploy.py               push repacked bundles into the cache (game/persistent auto)
-│   ├── bundle_cache.py         copy %LocalLow%/.../AssetBundle → <game>/AssetBundle (bilingual)
+│   ├── deploy.py               push repacked bundles into <game>/AssetBundle (mirrors originals to AssetBundle_old/)
+│   ├── bundle_cache.py         copy %LocalLow%/.../AssetBundle → <game>/AssetBundle
 │   ├── font_swap.py            TMP font swap (atlas + bundle + hidden font)
 │   └── export_chars.py         build target_chars.txt for the TMP font bake
 │
@@ -147,4 +147,5 @@ The only non-Python prerequisite for the patches themselves is **Il2CppDumper**,
 - [x] Offline boot end-to-end — 8 patch sites; title → home → story chapter list with no internet, no Steam
 - [x] Self-contained install — cache inside the game folder via NTFS junction
 - [x] Single-click launcher — bundles junction setup into the EXE (CMake-built, MSVC + MinGW)
+- [ ] Image extraction + translation — find in-game art that contains Japanese text and swap it
 - [ ] Translation memory + LLM pipeline for all 4,000+ stories

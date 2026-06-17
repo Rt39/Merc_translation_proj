@@ -524,7 +524,38 @@ def write_json_with_fingerprint(path: str, payload: dict, fps: dict, key: str):
 
 # === Commands ===
 
-def cmd_extract_story():
+def _confirm_overwrite(out_dir: str, label: str, yes: bool) -> bool:
+    """Guard re-extraction over an existing non-empty extracted_data subdir.
+
+    Returns True if the caller should proceed. False means the user
+    declined; the extract command should bail.
+
+    Re-extracting overwrites translator JSONs in place AND replaces the
+    fingerprint baseline in `.fingerprints.pkl`. After that, repack
+    sees the just-overwritten files as "matching the baseline" and
+    skips them — silently dropping the translator's edits. The default
+    answer is therefore N.
+    """
+    if not os.path.isdir(out_dir):
+        return True
+    if not any(os.scandir(out_dir)):
+        return True
+    print(f"  WARNING: {out_dir} already exists and is not empty.")
+    print(f"  Re-extracting {label} will overwrite any in-progress")
+    print( "  translations there. The fingerprint baseline in")
+    print(f"  {FINGERPRINTS_PATH} will also be replaced — repack")
+    print( "  would then treat the just-overwritten files as 'unchanged'.")
+    if yes:
+        print("  --yes given; proceeding with re-extract.")
+        return True
+    resp = input("  Continue and overwrite? [y/N]: ").strip().lower()
+    if resp not in ("y", "yes"):
+        print("  Aborted.")
+        return False
+    return True
+
+
+def cmd_extract_story(yes: bool = False):
     """`extract-story` command: extract every story bundle to
     extracted_data/story/<story_id>.json with the full MemoryPack schema.
 
@@ -540,6 +571,8 @@ def cmd_extract_story():
     and listed in `_errors.json`. That guarantees: if a story.json appears
     in the output, repacking it without changes is provably lossless.
     """
+    if not _confirm_overwrite(STORY_OUT, "story", yes):
+        return
     os.makedirs(STORY_OUT, exist_ok=True)
     fps = load_fingerprints()
 
@@ -623,7 +656,7 @@ def cmd_extract_story():
     print(f"\nDone in {time.time() - t0:.1f}s. Wrote {written} stories. Errors: {len(errors)}.")
 
 
-def cmd_extract_misc():
+def cmd_extract_misc(yes: bool = False):
     """`extract-misc` command: extract every MasterData bundle that holds JP
     text to extracted_data/misc/<AssetName>.json.
 
@@ -638,6 +671,8 @@ def cmd_extract_misc():
         string must be the same byte length as the original (length is
         preserved by the splice).
     """
+    if not _confirm_overwrite(MISC_OUT, "misc", yes):
+        return
     os.makedirs(MISC_OUT, exist_ok=True)
     fps = load_fingerprints()
 
@@ -716,11 +751,11 @@ def cmd_extract_misc():
     print(f"\nWrote {written} misc bundles to {MISC_OUT}. Errors: {len(errors)}.")
 
 
-def cmd_extract():
+def cmd_extract(yes: bool = False):
     """`extract` command — both story and misc, sequentially."""
-    cmd_extract_story()
+    cmd_extract_story(yes=yes)
     print()
-    cmd_extract_misc()
+    cmd_extract_misc(yes=yes)
 
 
 def _is_modified(path: str, key: str, fps: dict, force: bool) -> bool:
@@ -926,13 +961,15 @@ if __name__ == "__main__":
     )
     parser.add_argument("--force", action="store_true",
                         help="Repack even files whose hash matches the recorded baseline.")
+    parser.add_argument("--yes", "-y", action="store_true",
+                        help="Auto-confirm the extracted_data overwrite prompt.")
     args = parser.parse_args()
     if args.command == "extract":
-        cmd_extract()
+        cmd_extract(yes=args.yes)
     elif args.command == "extract-story":
-        cmd_extract_story()
+        cmd_extract_story(yes=args.yes)
     elif args.command == "extract-misc":
-        cmd_extract_misc()
+        cmd_extract_misc(yes=args.yes)
     elif args.command == "repack":
         cmd_repack(force=args.force)
     elif args.command == "repack-story":

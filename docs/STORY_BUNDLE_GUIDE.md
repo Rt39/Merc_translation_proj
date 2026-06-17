@@ -162,9 +162,9 @@ re-emitted (fingerprint comparison). String length is unconstrained — the
 plaintext is rewritten end-to-end, not spliced — so translated text can be
 any size.
 
-**D. Deploy.** `mercstoria deploy` copies `repacked_bundles/` onto the live
-cache (auto-prefers `<game>/AssetBundle` over LocalLow). Each replaced
-original is mirrored, in the same relative layout, under a sibling
+**D. Deploy.** `mercstoria deploy` copies `repacked_bundles/` into
+`<game>/AssetBundle/StandaloneWindows64/`. Refuses if that tree is empty
+— run `mercstoria bundle-cache` first. Each replaced original is mirrored, in the same relative layout, under a sibling
 `AssetBundle_old/` tree. Roll back by copying `AssetBundle_old/` over
 `AssetBundle/`; finalize by deleting `AssetBundle_old/`. The first copy of
 each file is the pristine original — re-running deploy never overwrites

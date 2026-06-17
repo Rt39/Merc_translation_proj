@@ -103,9 +103,12 @@ def step_font_swap() -> None:
     _run_script("font_swap", [str(LOGOFONT_BUNDLE)])
 
 
-def step_extract() -> None:
+def step_extract(yes: bool) -> None:
     _step("Step 4/6 — extract stories + 15 master bundles")
-    _run_script("extract_repack", ["extract"])
+    args = ["extract"]
+    if yes:
+        args.append("--yes")
+    _run_script("extract_repack", args)
 
 
 def step_bundle_cache(yes: bool) -> None:
@@ -152,7 +155,8 @@ def main() -> int:
     ap.add_argument("--skip-bundle-cache", action="store_true", help="Skip LocalLow→game cache copy.")
     ap.add_argument("--skip-launcher",     action="store_true", help="Skip launcher deploy.")
     ap.add_argument("--yes", "-y",         action="store_true",
-                    help="Auto-confirm the bundle-cache prompt.")
+                    help="Auto-confirm interactive prompts (bundle-cache copy, "
+                         "extracted_data overwrite).")
     args = ap.parse_args()
 
     print(f"== mercstoria setup ==")
@@ -166,7 +170,7 @@ def main() -> int:
     if not args.skip_font:
         step_font_swap()
     if not args.skip_extract:
-        step_extract()
+        step_extract(yes=args.yes)
     if not args.skip_bundle_cache:
         step_bundle_cache(yes=args.yes)
     if not args.skip_launcher:
