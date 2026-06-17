@@ -84,6 +84,7 @@ workshop/
 │   ├── patch_offline.py        Steam 绕过 + 证书跳过 + GetAsync（8 处）
 │   ├── verify_patches.py       两套修补的只读检查
 │   ├── extract_repack.py       剧情 + 15 个 master bundle 的 extract / repack
+│   ├── extract_ui.py           内嵌 UI 文本辅助（Timeline 片尾字幕，被 extract/repack 调用）
 │   ├── check_roundtrip.py      对前 N 个 story bundle 做 Reader/Writer 一致性检查
 │   ├── deploy.py               把重打包的 bundle 推到 <game>/AssetBundle（原文件镜像到 AssetBundle_old/）
 │   ├── bundle_cache.py         把 %LocalLow%/.../AssetBundle 拷到 <game>/AssetBundle
@@ -143,5 +144,6 @@ uv run -m mercstoria              # 显示完整子命令列表
 - [x] 离线启动端到端 —— 8 处修补点；无网无 Steam 即可到达 标题 → 主页 → 剧情章节列表
 - [x] 自包含安装 —— 缓存通过 NTFS junction 实际位于游戏目录内
 - [x] 单击启动器 —— junction 创建步骤打进了 EXE（CMake 构建，支持 MSVC + MinGW）
+- [x] 内嵌 UI 文本 —— 最终章片尾 Timeline 字幕通过 TypeTree 替换（4 个 bundle，44 行）
 - [ ] 图片提取与翻译 —— 找出游戏中含日文的美术资源并替换
 - [ ] 4,000+ 剧情的翻译记忆 + LLM 管线

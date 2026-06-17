@@ -253,6 +253,7 @@ def font_bundle_path() -> Path:
 
 STORY_MASTERDATA_SUBDIR = "StoryMasterData"
 MASTERDATA_SUBDIR       = "MasterData"
+BUNDLEASSETS_SUBDIR     = "BundleAssets"
 
 
 def story_masterdata_dir() -> Path:
@@ -263,6 +264,12 @@ def story_masterdata_dir() -> Path:
 def masterdata_dir() -> Path:
     """Live MasterData bundles: <persistent>/AssetBundle/StandaloneWindows64/MasterData."""
     return cache_root() / MASTERDATA_SUBDIR
+
+
+def bundleassets_dir() -> Path:
+    """Live BundleAssets bundles (cinematic Timeline assets, inline UI text):
+    <persistent>/AssetBundle/StandaloneWindows64/BundleAssets."""
+    return cache_root() / BUNDLEASSETS_SUBDIR
 
 
 # ============================================================================

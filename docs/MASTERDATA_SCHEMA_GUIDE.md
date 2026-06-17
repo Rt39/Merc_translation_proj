@@ -200,7 +200,7 @@ unmodified vanilla cache:
 | StampMasterData | 244 | 51 KB |
 | UnitSkillEffectMasterData | 132 | 133 KB |
 
-`uv run -m mercstoria extract-misc` writes 15 bundles to
+`uv run -m mercstoria extract` writes 15 bundles to
 `extracted_data/misc/`, all `(full schema)`, `Errors: 0`. A variable-length
 string edit was tested earlier (the first Chapter `Name` was extended from
 19 JP chars to 34 CN chars; plaintext grew 16819 → 16864 bytes, and the
@@ -209,7 +209,7 @@ Reader parsed back the modified string unchanged).
 ## Translator workflow
 
 ```
-uv run -m mercstoria extract-misc
+uv run -m mercstoria extract
 # Edit the string fields under Records[] in extracted_data/misc/<AssetName>.json:
 #   ChapterMasterData    -> Records[].Name / EventName
 #   StoryMasterData      -> Records[].Title / EventName / SubTitle
@@ -220,7 +220,7 @@ uv run -m mercstoria extract-misc
 #   UnitSkillEffectMasterData -> Records[].Name / Description
 #   ...other types analogous; lengths are unconstrained.
 
-uv run -m mercstoria repack-misc
+uv run -m mercstoria repack
 # Only edited JSONs get repacked (fingerprint comparison, same mechanism as
 # the story path).
 

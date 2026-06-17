@@ -132,18 +132,19 @@ UnityPy 能透明读到。`obj.read()` 返回 `TextAsset`,`.script` 就是密文
 
 ## 端到端流水线
 
-**A. Extract → JSON**。`mercstoria extract-story` 走遍 `StoryMasterData/`,
+**A. Extract → JSON**。`mercstoria extract` 走遍 `StoryMasterData/`,
 解密、跑完整 MemoryPack Reader(只有 round-trip 字节级一致的 bundle 才会进
 JSON 输出),给每个剧情写一份 JSON,带从 `StoryMasterData` + `ChapterMasterData`
-拉到的章节 / 集数元数据。`mercstoria extract-misc` 用同一套 Reader/Writer
+拉到的章节 / 集数元数据。同一个命令也用同一套 Reader/Writer
 处理 15 个 master bundle
-([`MASTERDATA_SCHEMA_GUIDE_zh-CN.md`](MASTERDATA_SCHEMA_GUIDE_zh-CN.md))。
+([`MASTERDATA_SCHEMA_GUIDE_zh-CN.md`](MASTERDATA_SCHEMA_GUIDE_zh-CN.md))
+以及 `BundleAssets/` 里的内嵌 UI 文本。
 ~4,000 剧情,~12 万对话行,~25 MB JSON,~30 秒。
 
 **B. 翻译**。本文不展开。遍历 JSON,把每条 `Text` 和每个 speaker 连同上下文
 丢给 LLM,写回。从 `dump.cs` 提角色名词表保证一致。
 
-**C. Repack**。`mercstoria repack-story` 用完整 Writer 重新序列化编辑过的
+**C. Repack**。`mercstoria repack` 用完整 Writer 重新序列化编辑过的
 JSON,新 IV 加密,写出 `UnityFS(lz4)` bundle。只重打 JSON 自上次 repack 后改过
 的(走 fingerprint 比对)。字符串长度无限制 —— plaintext 整段重写而非 splice,
 译文想多长多长。
@@ -154,6 +155,18 @@ JSON,新 IV 加密,写出 `UnityFS(lz4)` bundle。只重打 JSON 自上次 repac
 相对路径镜像到旁边的 `AssetBundle_old/` 树下。回滚:把 `AssetBundle_old/`
 覆盖回 `AssetBundle/`;最终化:直接删 `AssetBundle_old/`。每个文件的第一份
 副本就是原始版本 —— 之后再 deploy 永远不会覆盖已存在的备份。
+
+## 内嵌 UI 文本（Timeline 片尾字幕）
+
+少数 `BundleAssets/<hash>.bundle` 里的 MonoBehaviour 在 `parameter.text`
+字段中直接存了日文 —— 最终章片尾、credit roll 等 Unity Timeline 字幕。
+**不走** AES + MemoryPack，是普通 Unity 资产，通过 TypeTree 读写。
+
+`mercstoria extract` 会扫 `BundleAssets/`，把所有 `parameter.text` 含日文
+的 MonoBehaviour 写到 `extracted_data/inline_ui/<hash>.json`（条目格式
+`{path_id, name, text}`）。`mercstoria repack` 通过 TypeTree 把改过的
+`text` 写回 `repacked_bundles/inline_ui/<hash>.bundle`。
+原版数量 = 4 个 bundle，44 行文字。
 
 ## 最终状态(2026-06-17)
 
@@ -190,7 +203,8 @@ JSON,新 IV 加密,写出 `UnityFS(lz4)` bundle。只重打 JSON 自上次 repac
 | 路径 | 用途 |
 |---|---|
 | `mercstoria/memorypack.py` | AES 解密 + `StoryYamlData` 和 15 个 master record 的完整 MemoryPack Reader/Writer |
-| `scripts/extract_repack.py` | `mercstoria <subcmd>`:`extract` / `extract-story` / `extract-misc` / `repack` / `repack-story` / `repack-misc` / `test-repack` |
+| `scripts/extract_repack.py` | `mercstoria <subcmd>`：`extract` / `repack` / `test-repack` |
+| `scripts/extract_ui.py` | 内嵌 UI 文本辅助 —— 由 `mercstoria extract` / `repack` 在 AES + MemoryPack 管线之后调用 |
 | `scripts/check_roundtrip.py` | `mercstoria check-roundtrip [N]` —— 在 N 个 bundle 上回归 Reader/Writer |
 | `scripts/deploy.py` | `mercstoria deploy` —— 把 `repacked_bundles/` 拷进 live cache |
 | `scripts/bundle_cache.py` | `mercstoria bundle-cache` —— 把 LocalLow CDN cache 打进游戏目录 |

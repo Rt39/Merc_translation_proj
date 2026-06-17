@@ -21,8 +21,8 @@ SCRIPTS = ROOT / "scripts"
 SUBCOMMANDS = {
     "setup":           ("setup",           "End-to-end pre-translation: patch DLL + font swap + extract + bundle cache + deploy launcher"),
     "release":         ("release",         "End-to-end post-translation: repack changed JSONs + deploy to cache"),
-    "extract":         ("extract_repack",  "Extract story + misc to extracted_data/ (forward args to extract_repack.py)"),
-    "repack":          ("extract_repack",  "(alias of extract — same script, different subcommand arg)"),
+    "extract":         ("extract_repack",  "Extract story + misc + inline UI to extracted_data/"),
+    "repack":          ("extract_repack",  "Repack story + misc + inline UI to repacked_bundles/"),
     "deploy":          ("deploy",          "Deploy repacked_bundles/ to the live cache"),
     "bundle-cache":    ("bundle_cache",    "Bundle the LocalLow CDN cache into the game folder for offline mode"),
     "font-swap":       ("font_swap",       "Replace the in-game font atlas"),
@@ -33,16 +33,6 @@ SUBCOMMANDS = {
     "check-roundtrip": ("check_roundtrip", "Round-trip every cached story bundle through Reader/Writer"),
 }
 
-ALIASES = {
-    "extract": "extract",
-    "extract-story": "extract",
-    "extract-misc": "extract",
-    "repack": "repack",
-    "repack-story": "repack",
-    "repack-misc": "repack",
-    "test-repack": "repack",
-}
-
 
 def _print_usage() -> None:
     print("Usage: uv run -m mercstoria <subcommand> [args...]\n")
@@ -50,9 +40,6 @@ def _print_usage() -> None:
     width = max(len(s) for s in SUBCOMMANDS)
     for name, (_script, desc) in SUBCOMMANDS.items():
         print(f"  {name:<{width}}  {desc}")
-    print("\nFor extract/repack-specific verbs (extract-story, repack-misc, "
-          "test-repack, ...) run them as the first argument and they will be "
-          "forwarded to extract_repack.py.")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -64,12 +51,12 @@ def main(argv: list[str] | None = None) -> int:
     subcmd = args[0]
     forward = args[1:]
 
-    if subcmd in ALIASES:
-        # `extract-story` etc — forward the original arg as the script's first arg.
-        script = SUBCOMMANDS[ALIASES[subcmd]][0]
-        forward = [subcmd] + forward
-    elif subcmd in SUBCOMMANDS:
+    if subcmd in SUBCOMMANDS:
         script = SUBCOMMANDS[subcmd][0]
+        # extract / repack share the extract_repack.py script — its argparse
+        # expects the verb as the first positional.
+        if subcmd in ("extract", "repack"):
+            forward = [subcmd] + forward
     else:
         print(f"unknown subcommand: {subcmd!r}\n", file=sys.stderr)
         _print_usage()

@@ -39,8 +39,9 @@ cfg.enable_utf8_stdout()
 # Output of `mercstoria repack` — always at the repo root, not next
 # to this script (which now lives in scripts/).
 _HERE = Path(__file__).resolve().parent.parent
-REPACKED_STORY = _HERE / "repacked_bundles" / "story"
-REPACKED_MISC  = _HERE / "repacked_bundles" / "misc"
+REPACKED_STORY     = _HERE / "repacked_bundles" / "story"
+REPACKED_MISC      = _HERE / "repacked_bundles" / "misc"
+REPACKED_INLINE_UI = _HERE / "repacked_bundles" / "inline_ui"
 
 
 def _resolve_paths() -> tuple[Path, Path]:
@@ -104,14 +105,17 @@ def main() -> int:
 
     cache_story  = root / cfg.STORY_MASTERDATA_SUBDIR
     cache_master = root / cfg.MASTERDATA_SUBDIR
+    cache_ui     = root / cfg.BUNDLEASSETS_SUBDIR
     backup_story  = backup_root / cfg.STORY_MASTERDATA_SUBDIR
     backup_master = backup_root / cfg.MASTERDATA_SUBDIR
+    backup_ui     = backup_root / cfg.BUNDLEASSETS_SUBDIR
 
     print(f"Deploy target: {root}")
     print(f"Backup mirror: {backup_root}")
-    n_story = deploy(REPACKED_STORY, cache_story,  backup_story,  "story")
-    n_misc  = deploy(REPACKED_MISC,  cache_master, backup_master, "misc")
-    print(f"\nTotal: {n_story + n_misc} bundles. Originals mirrored under")
+    n_story = deploy(REPACKED_STORY,     cache_story,  backup_story,  "story")
+    n_misc  = deploy(REPACKED_MISC,      cache_master, backup_master, "misc")
+    n_ui    = deploy(REPACKED_INLINE_UI, cache_ui,     backup_ui,     "inline-ui")
+    print(f"\nTotal: {n_story + n_misc + n_ui} bundles. Originals mirrored under")
     print(f"  {backup_root.parent}")
     print("To roll back: copy AssetBundle_old/ over AssetBundle/.")
     print("To finalize:  delete AssetBundle_old/.")

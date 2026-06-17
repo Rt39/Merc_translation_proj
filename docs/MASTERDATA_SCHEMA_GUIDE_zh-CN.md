@@ -190,7 +190,7 @@ Vector3 Scale)`)。
 | StampMasterData | 244 | 51 KB |
 | UnitSkillEffectMasterData | 132 | 133 KB |
 
-`uv run -m mercstoria extract-misc` → 15 bundles 写入 `extracted_data/misc/`,
+`uv run -m mercstoria extract` → 15 bundles 写入 `extracted_data/misc/`,
 全部 `(full schema)`,`Errors: 0`。变长字符串 edit 之前实测过(把 Chapter
 第一条 Name 从 19 字符日文扩到 34 字符中文,plaintext 从 16819 → 16864 字节,
 Reader 重新解析正确)。
@@ -198,7 +198,7 @@ Reader 重新解析正确)。
 ## 翻译者使用流程
 
 ```
-uv run -m mercstoria extract-misc
+uv run -m mercstoria extract
 # extracted_data/misc/<AssetName>.json 里的 Records[] 直接编辑字符串字段:
 #   ChapterMasterData    -> Records[].Name / EventName
 #   StoryMasterData      -> Records[].Title / EventName / SubTitle
@@ -209,7 +209,7 @@ uv run -m mercstoria extract-misc
 #   UnitSkillEffectMasterData -> Records[].Name / Description
 #   ...其它类比,长度任意。
 
-uv run -m mercstoria repack-misc
+uv run -m mercstoria repack
 # 改过的 JSON 才会被重新打包(走 fingerprint 比对,跟 story 一套机制)。
 
 uv run -m mercstoria deploy

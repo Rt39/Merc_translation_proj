@@ -1,7 +1,8 @@
 """Merc Storia Translation Toolkit
 
 End-to-end pipeline for extracting, translating, and repacking every piece of
-translatable Japanese text in the game (story dialogue + master data).
+translatable Japanese text in the game (story dialogue + master data + inline
+UI text).
 
 Story path uses a full MemoryPack schema (see `mercstoria.memorypack`) — JSON
 ↔ bytes is byte-identical for 4008/4013 vanilla bundles, so translators can
@@ -10,26 +11,19 @@ insert or remove scenes, not just edit existing ones.
 Usage
 -----
     uv run -m mercstoria extract
-        Extract everything: stories AND misc MasterData. Equivalent to running
-        `extract-story` then `extract-misc`.
-
-    uv run -m mercstoria extract-story
-        Stories only → extracted_data/story/<story_id>.json. The JSON mirrors
-        StoryYamlData verbatim (every field from dump.cs, including _mc and
-        _skipped markers used to round-trip exactly). Translators edit
-        scenes[*].Text / .Speakers / character DisplayName fields in place.
-
-    uv run -m mercstoria extract-misc
-        MasterData bundles with JP text → extracted_data/misc/<AssetName>.json.
+        Extract everything: stories + misc MasterData + inline UI text into
+        extracted_data/{story,misc,inline_ui}/. JSON layout per subtree:
+          * story/<story_id>.json — full StoryYamlData (every dump.cs field).
+          * misc/<AssetName>.json — full-schema records or offset-spliced
+            strings, depending on the bundle.
+          * inline_ui/<bundle_hash>.json — `[{path_id, name, text}, ...]`
+            for Timeline cinematic dialogue stored as MonoBehaviour fields.
+        Translators edit user-visible string fields in place; `_mc`,
+        `_skipped`, `_null`/`_bits`, `path_id` etc. are round-trip metadata
+        and must be left untouched.
 
     uv run -m mercstoria repack
-        Repack everything (stories + misc) that has been modified.
-
-    uv run -m mercstoria repack-story
-        Repack only modified story JSONs → repacked_bundles/story/<bundle>.
-
-    uv run -m mercstoria repack-misc
-        Repack only modified misc JSONs → repacked_bundles/misc/<bundle>.
+        Repack everything modified into repacked_bundles/{story,misc,inline_ui}/.
 
     uv run -m mercstoria test-repack
         Round-trip a single bundle to confirm the pipeline.
@@ -555,7 +549,7 @@ def _confirm_overwrite(out_dir: str, label: str, yes: bool) -> bool:
     return True
 
 
-def cmd_extract_story(yes: bool = False):
+def cmd_extract_story(yes: bool = False, _skip_confirm: bool = False):
     """`extract-story` command: extract every story bundle to
     extracted_data/story/<story_id>.json with the full MemoryPack schema.
 
@@ -571,7 +565,7 @@ def cmd_extract_story(yes: bool = False):
     and listed in `_errors.json`. That guarantees: if a story.json appears
     in the output, repacking it without changes is provably lossless.
     """
-    if not _confirm_overwrite(STORY_OUT, "story", yes):
+    if not _skip_confirm and not _confirm_overwrite(STORY_OUT, "story", yes):
         return
     os.makedirs(STORY_OUT, exist_ok=True)
     fps = load_fingerprints()
@@ -656,7 +650,7 @@ def cmd_extract_story(yes: bool = False):
     print(f"\nDone in {time.time() - t0:.1f}s. Wrote {written} stories. Errors: {len(errors)}.")
 
 
-def cmd_extract_misc(yes: bool = False):
+def cmd_extract_misc(yes: bool = False, _skip_confirm: bool = False):
     """`extract-misc` command: extract every MasterData bundle that holds JP
     text to extracted_data/misc/<AssetName>.json.
 
@@ -671,7 +665,7 @@ def cmd_extract_misc(yes: bool = False):
         string must be the same byte length as the original (length is
         preserved by the splice).
     """
-    if not _confirm_overwrite(MISC_OUT, "misc", yes):
+    if not _skip_confirm and not _confirm_overwrite(MISC_OUT, "misc", yes):
         return
     os.makedirs(MISC_OUT, exist_ok=True)
     fps = load_fingerprints()
@@ -752,10 +746,27 @@ def cmd_extract_misc(yes: bool = False):
 
 
 def cmd_extract(yes: bool = False):
-    """`extract` command — both story and misc, sequentially."""
-    cmd_extract_story(yes=yes)
+    """`extract` command — story + misc + inline UI text, sequentially.
+
+    The overwrite confirmation fires once at the top: if any of the three
+    output subdirectories is already populated, a single [y/N] prompt
+    decides whether to overwrite all three. Sub-cmds run with the prompt
+    suppressed so the translator never sees three back-to-back questions.
+    """
+    if not _confirm_overwrite(EXTRACT_ROOT, "extracted_data", yes):
+        return
+    cmd_extract_story(yes=yes, _skip_confirm=True)
     print()
-    cmd_extract_misc(yes=yes)
+    cmd_extract_misc(yes=yes, _skip_confirm=True)
+    print()
+    # Delegate to extract_ui so all three pipelines share the same
+    # fingerprint file and the orchestrator only needs one extract step.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_extract_ui", str(Path(__file__).resolve().parent / "extract_ui.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod.cmd_extract_ui(yes=yes, _skip_confirm=True)
 
 
 def _is_modified(path: str, key: str, fps: dict, force: bool) -> bool:
@@ -901,10 +912,17 @@ def cmd_repack_misc(force: bool = False):
 
 
 def cmd_repack(force: bool = False):
-    """`repack` command — both story and misc, sequentially."""
+    """`repack` command — story + misc + inline UI, sequentially."""
     cmd_repack_story(force=force)
     print()
     cmd_repack_misc(force=force)
+    print()
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_extract_ui", str(Path(__file__).resolve().parent / "extract_ui.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod.cmd_repack_ui(force=force)
 
 
 def cmd_test_repack():
@@ -951,14 +969,7 @@ def cmd_test_repack():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Merc Storia Translation Toolkit")
-    parser.add_argument(
-        "command",
-        choices=[
-            "extract", "extract-story", "extract-misc",
-            "repack", "repack-story", "repack-misc",
-            "test-repack",
-        ],
-    )
+    parser.add_argument("command", choices=["extract", "repack", "test-repack"])
     parser.add_argument("--force", action="store_true",
                         help="Repack even files whose hash matches the recorded baseline.")
     parser.add_argument("--yes", "-y", action="store_true",
@@ -966,15 +977,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if args.command == "extract":
         cmd_extract(yes=args.yes)
-    elif args.command == "extract-story":
-        cmd_extract_story(yes=args.yes)
-    elif args.command == "extract-misc":
-        cmd_extract_misc(yes=args.yes)
     elif args.command == "repack":
         cmd_repack(force=args.force)
-    elif args.command == "repack-story":
-        cmd_repack_story(force=args.force)
-    elif args.command == "repack-misc":
-        cmd_repack_misc(force=args.force)
     elif args.command == "test-repack":
         cmd_test_repack()

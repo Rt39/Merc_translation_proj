@@ -142,20 +142,21 @@ UnityPy reads this transparently. `obj.read()` returns a `TextAsset` with
 
 ## End-to-end pipeline
 
-**A. Extract → JSON.** `mercstoria extract-story` walks every
+**A. Extract → JSON.** `mercstoria extract` walks every
 `StoryMasterData/`, decrypts, runs the full MemoryPack Reader (only bundles
 whose round-trip is byte-identical land in the JSON output), and writes one
 JSON per story labelled with chapter/episode metadata pulled from
-`StoryMasterData` + `ChapterMasterData`. `mercstoria extract-misc` covers
+`StoryMasterData` + `ChapterMasterData`. The same command also covers
 all 15 master bundles via the same Reader/Writer
-([`MASTERDATA_SCHEMA_GUIDE.md`](MASTERDATA_SCHEMA_GUIDE.md)). ~4,000
+([`MASTERDATA_SCHEMA_GUIDE.md`](MASTERDATA_SCHEMA_GUIDE.md)) and the
+inline UI text in `BundleAssets/`. ~4,000
 stories, ~120 k dialogue lines, ~25 MB JSON, ~30 s.
 
 **B. Translate.** Out of scope here. Walk the JSONs, send each `Text` and
 each speaker to an LLM with surrounding scene context, write back. Harvest
 the character-name glossary from `dump.cs`.
 
-**C. Repack.** `mercstoria repack-story` re-serializes the edited JSON via
+**C. Repack.** `mercstoria repack` re-serializes the edited JSON via
 the full Writer, encrypts with a fresh IV, and writes a `UnityFS(lz4)`
 bundle. Only bundles whose JSON has changed since the last repack are
 re-emitted (fingerprint comparison). String length is unconstrained — the
@@ -169,6 +170,19 @@ any size.
 `AssetBundle/`; finalize by deleting `AssetBundle_old/`. The first copy of
 each file is the pristine original — re-running deploy never overwrites
 an existing backup.
+
+## Inline UI text (Timeline cinematics)
+
+A few `BundleAssets/<hash>.bundle` files contain MonoBehaviour objects
+whose `parameter.text` field carries Japanese dialogue baked into Unity
+Timeline — the final-chapter cinematic, the credit roll, etc. These do
+NOT use AES + MemoryPack; they are plain Unity assets read via TypeTree.
+
+`mercstoria extract` walks `BundleAssets/`, dumps any MonoBehaviour with
+a JP `parameter.text` to `extracted_data/inline_ui/<hash>.json` (entries
+are `{path_id, name, text}`). `mercstoria repack` writes the new text
+back through TypeTree to `repacked_bundles/inline_ui/<hash>.bundle`.
+Vanilla = 4 bundles, 44 strings.
 
 ## Final state (2026-06-17)
 
@@ -207,7 +221,8 @@ an existing backup.
 | Path | Purpose |
 |---|---|
 | `mercstoria/memorypack.py` | AES decrypt + full MemoryPack Reader/Writer for `StoryYamlData` and 15 master records |
-| `scripts/extract_repack.py` | `mercstoria <subcmd>`: `extract` / `extract-story` / `extract-misc` / `repack` / `repack-story` / `repack-misc` / `test-repack` |
+| `scripts/extract_repack.py` | `mercstoria <subcmd>`: `extract` / `repack` / `test-repack` |
+| `scripts/extract_ui.py` | inline UI text helpers — called by `mercstoria extract` / `repack` after the AES + MemoryPack pipeline |
 | `scripts/check_roundtrip.py` | `mercstoria check-roundtrip [N]` — sanity-check Reader/Writer on N story bundles |
 | `scripts/deploy.py` | `mercstoria deploy` — copy `repacked_bundles/` onto the live cache |
 | `scripts/bundle_cache.py` | `mercstoria bundle-cache` — bundle the LocalLow CDN cache into the game folder for shipping |
