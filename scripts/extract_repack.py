@@ -300,37 +300,31 @@ def parse_story_master(bundle_path: str):
     """Parse StoryMasterData -> list of {chapter_id, story_id, title, episode,
     scene_key, display_order} dicts.
 
-    StoryMasterData is one of the MasterData bundles; it carries the title-
-    screen menu metadata for every story (which chapter it belongs to, the
-    episode label, the localised title shown in the chapter list). The
-    record layout uses MemoryPack with three int32 fields wrapped around
-    five strings — discovered empirically by diffing decrypted plaintexts
-    against the rendered menu.
+    StoryMasterData carries the title-screen menu metadata for every story
+    (which chapter it belongs to, the episode label, the localised title
+    shown in the chapter list). We read it through the verified MemoryPack
+    schema (`mercstoria.memorypack.Reader.story_master`) rather than a
+    hand-rolled fixed-layout walk: the StoryRecord has a variable-length
+    `Children` string-array and two adjacent int32s (`Type`, `UnitId`) that
+    a fixed walk got wrong, desyncing `pos` at the first record with a
+    non-empty `Children` and turning every later record — story 4347 among
+    them — into garbage (null titles, billion-range ids).
+
+    Keys are lower-cased and `EventName` is surfaced as `episode` to match
+    what `cmd_extract_story` reads.
     """
     _, enc = extract_textasset_raw(bundle_path)
     pt = decrypt(enc)
-    pos = 0
-    pos += 1
-    count = struct.unpack_from('<i', pt, pos)[0]; pos += 4
+    obj = _md.Reader(pt).story_master()
     records = []
-    for _ in range(count):
-        pos += 1
-        chapter_id = struct.unpack_from('<i', pt, pos)[0]; pos += 4
-        story_id = struct.unpack_from('<i', pt, pos)[0]; pos += 4
-        title, pos = read_string(pt, pos)
-        episode, pos = read_string(pt, pos)
-        scene_key, pos = read_string(pt, pos)
-        struct.unpack_from('<i', pt, pos)[0]; pos += 4
-        _f6, pos = read_string(pt, pos)
-        _f7, pos = read_string(pt, pos)
-        display_order = struct.unpack_from('<i', pt, pos)[0]; pos += 4
+    for r in (obj["Records"] or []):
         records.append({
-            "chapter_id": chapter_id,
-            "story_id": story_id,
-            "title": title,
-            "episode": episode,
-            "scene_key": scene_key,
-            "display_order": display_order,
+            "chapter_id": r["ChapterId"],
+            "story_id": r["StoryId"],
+            "title": r["Title"],
+            "episode": r["EventName"],
+            "scene_key": r["SubTitle"],
+            "display_order": r["Order"],
         })
     return records
 
