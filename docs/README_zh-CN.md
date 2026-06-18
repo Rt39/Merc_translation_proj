@@ -139,7 +139,7 @@ uv run -m mercstoria              # 显示完整子命令列表
 - [x] CRC 绕过 —— 4 处修补点，稳定
 - [x] 剧情文本解密 / 提取 —— 4,008 个剧情含元数据
 - [x] MasterData 文本 —— 全部 15 个 master bundle 走完整 MemoryPack schema（字节级 round-trip）
-- [x] 含译文的重打包 —— 端到端往返验证通过
+- [x] 含译文的重打包 —— 端到端往返验证通过；repack 为增量式（指纹存于 `extracted_data/.fingerprints.pkl`，每次成功打包后推进，再跑只处理此后改过的文件）
 - [x] 字体替换 —— 中文 SDF 在所有画面上正确渲染
 - [x] 离线启动端到端 —— 8 处修补点；无网无 Steam 即可到达 标题 → 主页 → 剧情章节列表
 - [x] 自包含安装 —— 缓存通过 NTFS junction 实际位于游戏目录内

@@ -285,12 +285,17 @@ def cmd_repack_ui(force: bool = False):
                 tqdm.write(f"  WARN {bundle_name}: applied {applied}/{len(edits)} entries")
             with open(dst, 'wb') as f:
                 f.write(env.file.save(packer='lz4'))
+            # Advance the fingerprint on success so a re-run skips this
+            # bundle until the translator edits it again.
+            fps[key] = sha256_file(jp)
             repacked += 1
             tqdm.write(f"  {bundle_name} <- {jp.name}  ({applied} edits)")
         except Exception as e:
             tqdm.write(f"  ERROR {bundle_name}: {e}")
             failed += 1
 
+    if repacked:
+        save_fingerprints(fps)
     print(f"\nInline-UI repack done in {time.time() - t0:.1f}s.")
     print(f"  repacked: {repacked}")
     print(f"  skipped (unmodified): {skipped}")

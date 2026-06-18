@@ -80,6 +80,13 @@ The junction at `%LocalLow%/.../AssetBundle` is left untouched; if you want
 to undo that too, simply `Remove-Item -LiteralPath <that junction>` — removing
 a reparse point does NOT delete the target.
 
+If the original game ran before the launcher's first launch, the launcher
+moved the real LocalLow cache aside to `AssetBundle.pre_setup` (or
+`.pre_setup_N`). That backup is your "revert to vanilla Japanese" copy. It is
+left in place until you reclaim the disk with `mercstoria release
+--purge-locallow-cache`, which removes both the live junction/dir and every
+`.pre_setup*` backup (each behind its own DELETE confirmation).
+
 ## Design notes
 
 * `launcher.c` is `/SUBSYSTEM:WINDOWS` (no console flash). Errors go through

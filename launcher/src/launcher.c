@@ -7,6 +7,8 @@
 //   3. If <persist_ab> already a reparse point -> trust it.
 //      Otherwise create the mount-point junction <persist_ab> -> <game>\AssetBundle.
 //      Existing non-junction directory is moved aside to *.pre_setup{N}.
+//      (That backup is the vanilla-Japanese cache; `mercstoria release
+//       --purge-locallow-cache` is what later reclaims it.)
 //   4. CreateProcessW the original game exe (メルストM.exe).
 //
 // Distribution layout (no renaming required):

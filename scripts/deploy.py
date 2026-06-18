@@ -15,7 +15,7 @@ Target: always `<game>/AssetBundle/StandaloneWindows64`. Deploy refuses
 if the game-folder cache is empty — run `mercstoria bundle-cache` first.
 The LocalLow cache is no longer the rollback (`AssetBundle_old/` is);
 it can be purged for disk reclaim via `mercstoria release
---purge-locallow-cache`.
+--purge-locallow-cache`, which also clears any launcher `.pre_setup` backups.
 """
 from __future__ import annotations
 

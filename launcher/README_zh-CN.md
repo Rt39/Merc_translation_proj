@@ -76,6 +76,12 @@ Remove-Item -LiteralPath "$dest\メルストM_chs.exe"
 `Remove-Item -LiteralPath <那个 junction>` —— 删 reparse point **不会**删除
 目标目录。
 
+如果在第一次跑启动器之前先跑过原版游戏，启动器会把 LocalLow 里那个真实
+缓存目录改名让位到 `AssetBundle.pre_setup`（或 `.pre_setup_N`）。这个备份
+就是你"退回原版日文"的退路，会一直留着，直到你用
+`mercstoria release --purge-locallow-cache` 回收磁盘 —— 那一步会同时清掉
+现役 junction/目录和所有 `.pre_setup*` 备份（各自有独立的 DELETE 确认）。
+
 ## 设计要点
 
 * `launcher.c` 走 `/SUBSYSTEM:WINDOWS`（不闪控制台）。错误用 `MessageBoxW`

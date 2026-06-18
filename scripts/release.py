@@ -14,12 +14,15 @@ Each step is idempotent. Skip individually with `--skip-repack` or
 fingerprint, and `--target {auto,game,persistent}` to override the deploy
 destination.
 
-Optional final cleanup: pass `--purge-locallow-cache` to delete the
-LocalLow `AssetBundle/` directory once the cache lives in the game folder.
-The flag is intentionally long because the operation is destructive — the
-step refuses unless `<game>/AssetBundle/StandaloneWindows64` exists and is
-non-empty, and a real (non-junction) LocalLow directory still needs the
-user to type `DELETE` (or pass `--yes`).
+Optional final cleanup: pass `--purge-locallow-cache` to reclaim LocalLow
+disk once the cache lives in the game folder. It removes the LocalLow
+`AssetBundle/` (unlinking a junction, or recursively deleting a real dir)
+**and** any launcher-created `AssetBundle.pre_setup*` backups. The flag is
+intentionally long because the operation is destructive — the step refuses
+unless `<game>/AssetBundle/StandaloneWindows64` exists and is non-empty, and
+a real (non-junction) LocalLow plus the `.pre_setup` backups each still need
+the user to type `DELETE` (or pass `--yes`). The `.pre_setup` backups are the
+only "revert to vanilla Japanese" copy, so they confirm separately.
 """
 from __future__ import annotations
 
@@ -96,22 +99,64 @@ def _is_reparse_point(p: Path) -> bool:
         return False
 
 
-def step_purge_locallow(yes: bool) -> None:
-    """Optional final step: reclaim the LocalLow `AssetBundle/`.
+def _purge_pre_setup_backups(yes: bool) -> None:
+    """Remove launcher-created `AssetBundle.pre_setup*` backups in LocalLow.
 
-    Two states LocalLow can be in:
-      * junction (post-launcher) — just unlink the reparse point; the
-        actual data lives in <game>/AssetBundle and is untouched.
-      * real directory (pre-launcher, post-bundle-cache) — recursive
-        delete. Refuses unless <game>/AssetBundle/StandaloneWindows64
-        exists and is non-empty, and (without --yes) requires the user
-        to type `DELETE` so a stray re-run can't wipe a populated cache.
+    The launcher (`launcher.c`) renames a pre-existing real `AssetBundle`
+    directory to `AssetBundle.pre_setup{,_N}` before installing its junction.
+    Each is a full copy of the *original, un-translated* CDN cache (~15 GB)
+    and is a distinct rollback path from `<game>/AssetBundle_old/` — it reverts
+    to the vanilla Japanese game, not just the pre-deploy bundles. Purging
+    reclaims that disk but removes the only "back to vanilla" copy, so this
+    confirms separately from the live-cache purge and never deletes silently.
+    """
+    root = cfg.persist_root()
+    backups = sorted(root.glob("AssetBundle.pre_setup*")) if root.is_dir() else []
+    if not backups:
+        return
+
+    print(f"  Found {len(backups)} launcher backup(s) under {root}:")
+    for b in backups:
+        print(f"    {b.name}")
+    print("  These hold the ORIGINAL (un-translated) cache. Deleting them")
+    print("  removes the only 'revert to vanilla' copy; AssetBundle_old/ only")
+    print("  rolls back the deployed bundles, not the whole vanilla game.")
+    if not yes:
+        resp = input("  Type DELETE to remove these backups (anything else keeps them): ").strip()
+        if resp != "DELETE":
+            print("  Kept; .pre_setup backups left intact.")
+            return
+    else:
+        print("  --yes given; removing .pre_setup backups.")
+
+    for b in backups:
+        shutil.rmtree(b)
+        print(f"  [purge] {b}")
+
+
+def step_purge_locallow(yes: bool) -> None:
+    """Optional final step: reclaim LocalLow disk.
+
+    Cleans up two redundant things once the cache lives in the game folder:
+      * the live `AssetBundle` path — a junction (post-launcher) is just
+        unlinked (target untouched); a real directory (pre-launcher,
+        post-bundle-cache) is recursively deleted, but only after confirming
+        <game>/AssetBundle/StandaloneWindows64 is populated and (without
+        --yes) the user types `DELETE`.
+      * launcher-created `AssetBundle.pre_setup*` backups — see
+        `_purge_pre_setup_backups`. Confirmed separately because they are the
+        only "revert to vanilla" copy.
+
+    The `.pre_setup` sweep runs in every path (junction, real-dir, and even
+    when the live AssetBundle is already gone), since those backups are
+    siblings of `AssetBundle` and outlive it.
     """
     _step("Step 3/3 — purge LocalLow cache (--purge-locallow-cache)")
 
     persist = cfg.persist_assetbundle()
     if not persist.exists():
-        print(f"  {persist} does not exist; nothing to purge.")
+        print(f"  {persist} does not exist; nothing to purge there.")
+        _purge_pre_setup_backups(yes)
         return
 
     game_cache = cfg.game_dir() / "AssetBundle"
@@ -131,6 +176,7 @@ def step_purge_locallow(yes: bool) -> None:
         os.unlink(persist)
         print(f"  [unlink] {persist}")
         print(f"  Junction removed; cache in {game_cache} untouched.")
+        _purge_pre_setup_backups(yes)
         return
 
     # Real directory — much higher stakes. Demand explicit confirmation.
@@ -141,12 +187,14 @@ def step_purge_locallow(yes: bool) -> None:
         resp = input("  Type DELETE to proceed (anything else aborts): ").strip()
         if resp != "DELETE":
             print("  Aborted; LocalLow left intact.")
+            _purge_pre_setup_backups(yes)
             return
     else:
         print("  --yes given; proceeding without prompt.")
 
     shutil.rmtree(persist)
     print(f"  [purge] {persist}")
+    _purge_pre_setup_backups(yes)
 
 
 def main() -> int:
@@ -159,11 +207,12 @@ def main() -> int:
     ap.add_argument("--force",       action="store_true",
                     help="Repack every JSON regardless of fingerprint.")
     ap.add_argument("--purge-locallow-cache", action="store_true",
-                    help="After deploy, delete %%LocalLow%%/.../AssetBundle. "
+                    help="After deploy, delete %%LocalLow%%/.../AssetBundle "
+                         "plus any launcher AssetBundle.pre_setup* backups. "
                          "AssetBundle_old/ is the rollback now; LocalLow is "
-                         "redundant duplicate storage. For a real "
-                         "(non-junction) LocalLow, also requires typing DELETE "
-                         "at the prompt (or --yes).")
+                         "redundant duplicate storage. A real (non-junction) "
+                         "LocalLow and the .pre_setup backups each require "
+                         "typing DELETE at the prompt (or --yes).")
     ap.add_argument("--yes", "-y",   action="store_true",
                     help="Auto-confirm the purge prompt. No effect without "
                          "--purge-locallow-cache.")

@@ -45,6 +45,13 @@ matches the recorded baseline are treated as untouched and skipped — only the
 files the translator actually edited get repacked. Pass `--force` to repack
 unconditionally.
 
+A successful repack then advances that file's fingerprint to its current hash,
+so the baseline tracks "last successfully packed" rather than "as extracted".
+Re-running repack therefore skips files that haven't changed since they were
+last packed; a file is only re-packed after the translator edits it again. A
+failed pack leaves the old fingerprint in place so the file stays flagged as
+modified and gets retried next run.
+
 Encryption: AES-256-CBC-PKCS7
     Key: PBKDF2-HMAC-SHA256(password="2147483647", salt="-2147483648",
                             iterations=1024, dklen=32)
@@ -468,7 +475,9 @@ def has_jp(s: str) -> bool:
 # We checksum each extracted JSON the moment we write it and store the hash in
 # .fingerprints.pkl. On repack, files whose current hash matches the recorded
 # one are treated as untouched and skipped. That way a re-extract (which is
-# byte-identical) doesn't trigger a re-repack of every bundle.
+# byte-identical) doesn't trigger a re-repack of every bundle. A successful
+# repack advances the stored hash to the file's current bytes, so a file is
+# only re-packed after the translator edits it again (not on every repack run).
 
 def sha256_bytes(b: bytes) -> str:
     """Hex SHA-256 over a bytes buffer."""
@@ -843,11 +852,17 @@ def cmd_repack_story(force: bool = False):
             story_dict = _story_dict_from_json(payload)
             new_pt = _md.serialize_story(story_dict)
             repack_bundle(src, dst, lambda _orig, _b=new_pt: _b)
+            # Advance the fingerprint to the just-packed bytes so a later
+            # repack skips this file unless the translator edits it again.
+            # Only on success — a failed pack must stay "modified".
+            fps[key] = sha256_file(fpath)
             repacked += 1
         except Exception as e:
             tqdm.write(f"  ERROR {bundle}: {e}")
             failed += 1
 
+    if repacked:
+        save_fingerprints(fps)
     print(f"\nStory repack done in {time.time() - t0:.1f}s.")
     print(f"  repacked: {repacked}")
     print(f"  skipped (unmodified): {skipped}")
@@ -901,12 +916,17 @@ def cmd_repack_misc(force: bool = False):
                 repack_bundle(src, dst, lambda _orig, _b=new_pt: _b)
             else:
                 repack_bundle(src, dst, lambda pt, _d=doc: apply_misc_json(pt, _d))
+            # Advance the fingerprint on success so re-running repack skips
+            # this file until the translator edits it again.
+            fps[key] = sha256_file(fpath)
             repacked += 1
             tqdm.write(f"  {doc.get('asset', bundle)} -> {dst}")
         except Exception as e:
             tqdm.write(f"  ERROR {bundle}: {e}")
             failed += 1
 
+    if repacked:
+        save_fingerprints(fps)
     print(f"\nMisc repack: {repacked} repacked, {skipped} skipped (unmodified), {failed} failed")
     print(f"Output: {REPACK_MISC}")
 

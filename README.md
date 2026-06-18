@@ -143,7 +143,7 @@ The only non-Python prerequisite for the patches themselves is **Il2CppDumper**,
 - [x] CRC bypass — 4 patch sites, stable
 - [x] Story text decrypt / extract — 4,008 stories with metadata
 - [x] MasterData text — all 15 master bundles parsed via full MemoryPack schema (byte-identical round-trip)
-- [x] Repack with translated content — round-trip verified
+- [x] Repack with translated content — round-trip verified; repack is incremental (fingerprints in `extracted_data/.fingerprints.pkl` advance on each successful pack, so re-runs only touch files edited since)
 - [x] Font replacement — Chinese SDF rendering across all screens
 - [x] Offline boot end-to-end — 8 patch sites; title → home → story chapter list with no internet, no Steam
 - [x] Self-contained install — cache inside the game folder via NTFS junction
