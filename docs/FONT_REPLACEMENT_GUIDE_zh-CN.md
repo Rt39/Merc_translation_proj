@@ -19,10 +19,10 @@
 ### 2. `resources.assets` 中的隐藏字体 asset —— 标题 / 菜单 / 主页
 
 - **文件**：`メルストM_Data/resources.assets`
-- **MonoBehaviour pathID**：`27`，字节偏移 `173728`，大小 `630328`
-- 同名 `RocknRollStd SDF` —— 与 bundle 副本**逐字节相同，除了 49 字节 `m_Script` PPtr**。
+- **MonoBehaviour pathID**：`27`，原始大小 630,328 字节（Patch C 后会增大；SerializedFile 重存时下游 offset 自动跟着调整）。
+- 同名 `RocknRollStd SDF`，字段布局与 bundle 副本一致 —— 原版只在 49 字节 `m_Script` PPtr 处不同。
 - 引用 `resources.assets` 中 pid `10` 的 atlas Texture2D。
-- **UnityPy 用 typetree 无法解析** —— `TMP_FontAsset` 的 MonoScript 类没在这个序列化文件里注册（`Expected to read 630328 bytes, but only read 48 bytes`）。raw bytes 可通过 `obj.get_raw_data()` 拿到。
+- **本文件自身没有 `TMP_FontAsset` 的 TypeTree** —— UnityPy 解析时报 `Expected to read 630328 bytes, but only read 48 bytes`。绕开办法：把 bundle 副本的 `serialized_type.nodes` 传给 `read_typetree` / `save_typetree`（见 Patch C）。
 - **标题画面菜单、剧情列表卡、主页文本**消费它。只改 bundle 副本会让这份保持旧版 —— 这就是"剧情正常但菜单 / 标题乱码"的根因。
 
 ### 3. Atlas 像素 —— 16 MB Alpha8 4096×4096
@@ -57,17 +57,19 @@ bundle 里有 12 个材质（`RocknRollStd SDF (Story)`、`RocknRollOne (Brown O
 
 ### Patch C —— `resources.assets` 中的隐藏字体 asset ⚠️
 
-这是互联网上别的人漏掉的部分。这个 MonoBehaviour **无法**通过 typetree 修改（UnityPy 没有 schema）。因为 Patch B 没动 `m_FaceInfo`，那段字节在原版和修补版之间相同，字节 diff 在那里为空，`m_LineHeight = 64.0` 在 `resources.assets` 中自动保留。用**字节 diff 戏法**：
+`resources.assets` 是 IL2CPP release `SerializedFile`，没有内嵌 `TMP_FontAsset` 的 TypeTree，UnityPy 无法直接解析 pid=27。但 bundle 那份字体 asset *是带 TypeTree* 的（asset bundle 自带类型信息）—— 借过来用：
 
-1. 在内存中对 bundle 字体 asset 的新副本做同一个字形表移植。
-2. 序列化那个 bundle（`env.file.save(packer="lz4")`），再加载提取改写后的 630,328 字节 MonoBehaviour blob → `patched_raw`。
-3. 把 `patched_raw` 与原 bundle 字体 asset 字节 diff → 变化的字节偏移列表（都在字形表区域）。
-4. 读原 `resources.assets` 的 pid=27 字节。两个 MonoBehaviour 起始字节完全相同（除了 header 附近的 49 字节 `m_Script` PPtr），所以 diff 偏移完美对齐。
-5. **就地**只覆盖 `resources.assets` 里那些字节。文件大小不变 → 不用修 SerializedFile header 或 object table。
+```python
+nodes = bundle_font_obj.serialized_type.nodes
+tt    = pid27.read_typetree(nodes)
+transplant_keys_into(tt, source_font_tt)        # 与 Patch B 同一组 key
+pid27.save_typetree(tt, nodes)
+env_resources.file.save()                       # writer 自动修 object table + offset
+```
 
-最终改动约 100 KB 的字形矩形 / 度量数据。结构、PPtr 引用、m_Script 绑定、其他每个字段都不动。
+`m_AtlasTextures`（pid=10）、`m_Material`（pid=2）、fallback 表、`m_FaceInfo` 都不在 transplant key 集里，所以原 PPtr 和度量都保留。pid=27 从 7,007 字扩到 7,656 字（807,432 → 860,480 字节），SerializedFile writer 自动修后续对象的 `byte_starts`，无需手动算偏移。
 
-结果：两个字体 asset 都指向 atlas 中同样的位置，atlas 在那些位置有了新像素，两个渲染器都显示新字体。
+结果：两个字体 asset 共用同一组 atlas 坐标，且现在都覆盖完整 7,656 字 —— 包括原 `RocknRollStd SDF` 没有的简体专用字（如 线/汉/产，过去在标题 / 主页 / 章节列表会回退或乱码）。
 
 ## 应用
 
@@ -89,7 +91,7 @@ uv run -m mercstoria font-swap "<path>/logofont.bundle"
 
 由前文修补策略推出两个**不可调**的参数：
 
-- **Unity 6000.0.58f2** —— Patch C 的就地字节 diff 之所以成立，依赖源和目标 MonoBehaviour 字段布局逐字节一致；这又取决于这个 Unity 版本带的 TMP 包版本。
+- **Unity 6000.0.58f2** —— bundle 字体的 TypeTree 被借去解析 `resources.assets` pid=27，所以两份 asset 必须出自同一个 TMP 包；不同的 Unity / TMP 组合可能布局不一致。
 - **`samplingPointSize = 32`** —— 必须等于保留下来的 `m_FaceInfo.m_PointSize`，否则字形以错误的比例渲染（见 Patch B）。
 
 烤的步骤大致是：用 `TMP_FontAsset.CreateFontAsset(font, samplingPointSize: 32, atlasPadding: 5, GlyphRenderMode.SDFAA_HINTED, atlasWidth: 4096, atlasHeight: 4096, ...)` 建空字体，`TryAddCharacters(targetChars)` 灌字符，`atlasPopulationMode = Static` 冻结，把 asset 和 atlas Texture 标上同一个 `assetBundleName = "logofont.bundle"`，最后 `BuildPipeline.BuildAssetBundles(..., BuildAssetBundleOptions.ChunkBasedCompression, BuildTarget.StandaloneWindows64)` 出包。具体 API 见：
@@ -107,7 +109,7 @@ uv run -m mercstoria font-swap "<path>/logofont.bundle"
 
 旧版只按频率截到 top-5,500，导致 ~499 个一级字（赛 / 翼 / 羹 …）被静默丢弃。新版用必带 + 填充的两段式：一级字保证全收，atlas 满了也不掉；若任何一级字未能进入最终集合，脚本以"不变量违反"错误退出。当前输出 7,800 字，刚好打满 atlas 上限。
 
-**重要：** 译文中用到但未在图集中的字会在游戏里显示为随机字形碎片（Patch A 清掉了该位置的图集像素，但 Patch C 仍指向原矩形）。译文文件扫描正是为了这一点 —— 翻译集扩张时，在仓库根目录新增 `translate_*.py` 然后重跑 `mercstoria export-chars` 即可。
+**重要：** 译文中用到但未在图集中的字会在游戏里显示为随机字形碎片 —— Patch A 清掉了该码位原矩形位置的图集像素，新字符 / 字形表又指向从未烤过的坐标。译文文件扫描正是为了这一点 —— 翻译集扩张时，在仓库根目录新增 `translate_*.py` 然后重跑 `mercstoria export-chars` 即可。
 
 ### 验证 bundle
 
@@ -119,8 +121,8 @@ uv run -m mercstoria font-swap "<path>/logofont.bundle"
 - **LocalLow CDN 缓存覆盖** —— 扫了 38,331 个下载 bundle，没有字体 asset overlay。
 - **通过 NBSP 槽走 TMP fallback 链** —— 把小 NBSP bundle（`08c96b...`）替换为 LogoSC 内容。bundle 字体 asset 的 fallback 链生效，但 `resources.assets` 里隐藏字体 asset 有它自己的 fallback 表，指向 `sharedassets` 里的 stub（Arial SDF / Arial Unicode SDF —— 3 个和 11 个字符）。fallback 触不到 LogoSC，菜单不变。
 - **MelonLoader / UnityExplorer / BepInEx 6.0.0-pre** —— Il2CppInterop 在 Unity 6000.0.58f2 上崩溃（`Class_FromIl2CppType_Hook` 中 `AccessViolationException`）；Unhollower 生成不出 IL2CPP 代理。截至撰写时这个 Unity 版本没有可用的运行时工具。
-- **对 pid=27 用 `UnityPy.save_typetree`** —— typetree 回退到 48 字节最小 schema，文件损坏。Patch C 的字节 diff 绕过了这个问题。
-- **用 `set_raw_data` + `env.file.save()` 替换 pid=27 整体** —— 大小变化时 SerializedFile object table / 跨对象 PPtr 没被正确修复 → 启动黑屏。务必只改字形表区域以保持原大小。
+- **不传 nodes 调 `UnityPy.save_typetree(pid=27)`** —— 回退到 48 字节最小 schema，文件损坏。必须显式传 bundle 的 `serialized_type.nodes`。
+- **用 `set_raw_data` 替换 pid=27 但不重存 SerializedFile** —— 早期版本试过；object table 没被修复，启动黑屏。`save_typetree` 后跟 `env.file.save()` 才会修。
 
 ## 文件参考
 

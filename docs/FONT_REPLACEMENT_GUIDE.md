@@ -21,10 +21,10 @@ The central finding. Patching only one produces partial garble.
 ### 2. Hidden font asset in `resources.assets` — title / menu / home
 
 - **File**: `メルストM_Data/resources.assets`
-- **MonoBehaviour pathID**: `27`, byte offset `173728`, size `630328`
-- Same name `RocknRollStd SDF` — byte-identical to the bundle copy **except 49 bytes of `m_Script` PPtr**.
+- **MonoBehaviour pathID**: `27`, originally 630,328 bytes (grows after Patch C; SerializedFile resaves so downstream offsets adjust automatically).
+- Same name `RocknRollStd SDF`, same field layout as the bundle copy — only the 49-byte `m_Script` PPtr differs in the original.
 - References atlas Texture2D at pid `10` (texture in `resources.assets`).
-- **UnityPy CANNOT parse via typetree** — the `TMP_FontAsset` MonoScript class is not registered for this serialized file (`Expected to read 630328 bytes, but only read 48 bytes`). Raw bytes available via `obj.get_raw_data()`.
+- **UnityPy can't parse pid=27 with the file's own type info** — the `TMP_FontAsset` MonoScript class isn't registered here (`Expected to read 630328 bytes, but only read 48 bytes`). Workaround: pass the bundle copy's `serialized_type.nodes` to `read_typetree` / `save_typetree` (see Patch C).
 - Consumed by **title screen menu, story list cards, home screen text**. Patching only the bundle copy leaves this stale — root cause of "story renders correctly but menu/title is garble".
 
 ### 3. Atlas pixels — 16 MB Alpha8 4096×4096
@@ -59,17 +59,19 @@ Also overwrite both 16 MB slots inside the bundle's `.resS` with the new atlas b
 
 ### Patch C — hidden font asset in `resources.assets` ⚠️
 
-This is the part the rest of the internet misses. The MonoBehaviour cannot be modified via typetree (UnityPy doesn't have the schema). Because Patch B didn't touch `m_FaceInfo`, those bytes are identical between original and patched → the byte-diff is empty there → `m_LineHeight = 64.0` is auto-preserved. Use the **byte-diff trick**:
+`resources.assets` is an IL2CPP release `SerializedFile` with no embedded TypeTree for `TMP_FontAsset`, so UnityPy can't parse pid=27 directly. The bundle copy of the font asset *does* embed a TypeTree (asset bundles serialize their own type info) — borrow it:
 
-1. Build the **same** glyph table transplant on a fresh copy of the bundle's font asset in memory.
-2. Serialize that bundle (`env.file.save(packer="lz4")`) and re-load to extract the rewritten 630,328-byte MonoBehaviour blob → `patched_raw`.
-3. Diff `patched_raw` against the original bundle font asset → list of byte offsets that changed (all in the glyph-table region).
-4. Read the original `resources.assets` pid=27 bytes. The two MonoBehaviours start byte-identical (except the 49-byte `m_Script` PPtr near the header), so the diff offsets line up exactly.
-5. **In-place** overwrite only those bytes inside `resources.assets`. File size unchanged → no SerializedFile header or object-table fixups needed.
+```python
+nodes = bundle_font_obj.serialized_type.nodes
+tt    = pid27.read_typetree(nodes)
+transplant_keys_into(tt, source_font_tt)        # same key set as Patch B
+pid27.save_typetree(tt, nodes)
+env_resources.file.save()                       # writer fixes object table + offsets
+```
 
-Ends up modifying ~100 KB of glyph rect / metrics data. Structure, PPtr references, m_Script binding, every other field untouched.
+`m_AtlasTextures` (pid=10), `m_Material` (pid=2), fallback table, and `m_FaceInfo` are not in the transplant key set, so the original PPtrs and metrics survive. pid=27 grows from 7,007 to 7,656 chars (807,432 → 860,480 bytes); the SerializedFile writer recomputes downstream `byte_starts` automatically — no manual offset bookkeeping.
 
-Result: both font assets point into the same atlas positions, atlas has new pixels at those positions, both renderers display the new font.
+Result: both font assets share the same atlas positions and now cover the full 7,656-char set, including chars the original `RocknRollStd SDF` lacked (e.g. simplified-only forms like 线/汉/产 on title / home / chapter-list screens).
 
 ## Apply
 
@@ -90,7 +92,7 @@ The font swap consumes a Unity asset bundle containing one `TMP_FontAsset` MonoB
 
 Two non-negotiable parameters when baking, derived from the patch strategy above:
 
-- **Unity 6000.0.58f2** — the in-place byte-diff in Patch C only works because the source and target MonoBehaviour layouts are bit-identical, which depends on the exact TMP package version shipped with this Unity version.
+- **Unity 6000.0.58f2** — the bundle font's TypeTree is reused to parse `resources.assets` pid=27, so both copies must derive from the same TMP package. A different Unity / TMP combo could diverge.
 - **`samplingPointSize = 32`** — must equal the preserved `m_FaceInfo.m_PointSize`, otherwise glyphs render at the wrong scale (see Patch B).
 
 Bake an empty `TMP_FontAsset` via `TMP_FontAsset.CreateFontAsset(font, samplingPointSize: 32, atlasPadding: 5, GlyphRenderMode.SDFAA_HINTED, atlasWidth: 4096, atlasHeight: 4096, ...)`, populate it with `TryAddCharacters(targetChars)`, freeze `atlasPopulationMode = Static`, tag the asset + atlas texture for the same `assetBundleName = "logofont.bundle"`, and `BuildPipeline.BuildAssetBundles(..., BuildAssetBundleOptions.ChunkBasedCompression, BuildTarget.StandaloneWindows64)`. References:
@@ -108,7 +110,7 @@ Bake an empty `TMP_FontAsset` via `TMP_FontAsset.CreateFontAsset(font, samplingP
 
 The previous frequency-only cap silently dropped ~499 L1 chars (赛 / 翼 / 羹 …). The split guarantees L1 lands in the atlas even when the atlas saturates — the script aborts with an invariant-violated error if any L1 char ends up missing. Current output: 7,800 chars exactly at the atlas ceiling.
 
-**Important:** anything used in a CN translation but NOT in the atlas renders as a random glyph fragment at runtime (Patch A wipes the atlas pixel at that glyph's original rect, but Patch C keeps the rect pointing there). The translation-file scan exists for exactly this reason — add new `translate_*.py` files at the repo root and re-run `mercstoria export-chars` whenever the translation set grows.
+**Important:** anything used in a CN translation but NOT in the atlas renders as a random glyph fragment at runtime — Patch A wipes the atlas pixel at that codepoint's original rect, and the new char/glyph table points to coordinates that were never baked. The translation-file scan exists for exactly this reason — add new `translate_*.py` files at the repo root and re-run `mercstoria export-chars` whenever the translation set grows.
 
 ### Verifying the bundle
 
@@ -120,8 +122,8 @@ Before running `font-swap`, check the bake reports the expected shape with Unity
 - **LocalLow CDN cache shadowing** — scanned 38,331 downloaded bundles, no font asset overlay.
 - **TMP fallback chain via NBSP slot** — replaced small NBSP bundle (`08c96b...`) with LogoSC content. Works for the bundle font asset's chain, but the hidden font asset in `resources.assets` has its own fallback table pointing into `sharedassets` stubs (Arial SDF / Arial Unicode SDF — 3 and 11 chars). Fallback does NOT reach LogoSC for the menu.
 - **MelonLoader / UnityExplorer / BepInEx 6.0.0-pre** — Il2CppInterop crashes on Unity 6000.0.58f2 (`AccessViolationException` in `Class_FromIl2CppType_Hook`); Unhollower can't generate IL2CPP proxies. No usable runtime tool for this Unity version at the time of writing.
-- **`UnityPy.save_typetree` on pid=27** — typetree falls back to 48-byte minimal schema and corrupts the file. The byte-diff approach (Patch C) sidesteps this.
-- **Replacing pid=27 with patched bytes via `set_raw_data` + `env.file.save()`** — SerializedFile object table / inter-object PPtrs not fixed up when size changes → black-screen on launch. Always preserve original size by patching only the glyph-table region.
+- **`UnityPy.save_typetree` on pid=27 without nodes** — falls back to 48-byte minimal schema and corrupts the file. Pass the bundle's `serialized_type.nodes` explicitly.
+- **`set_raw_data` of pid=27 without resaving the SerializedFile** — early Patch C revision; the object table doesn't get fixed up so the file black-screens on launch. `env.file.save()` after `save_typetree` does the fixup.
 
 ## File reference
 

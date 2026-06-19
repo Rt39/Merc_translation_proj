@@ -7,10 +7,13 @@ make the new font render across the entire game:
   A) overwrite the shared atlas pixels in `resources.assets.resS`
   B) transplant the glyph/char tables into the bundle's font asset
      (84ece16f...bundle, pathID 6189425675716077201) — fixes story rendering
-  C) byte-diff patch the HIDDEN font asset in `resources.assets` (pid=27)
-     — fixes title/menu/home rendering. This MonoBehaviour cannot be parsed
-     via UnityPy typetree because the MonoScript binding for TMP_FontAsset is
-     not registered in resources.assets's serialized file.
+  C) full TypeTree transplant of the HIDDEN font asset in `resources.assets`
+     (pid=27). resources.assets has no embedded TypeTree for TMP_FontAsset
+     (IL2CPP release builds strip it), so we borrow the bundle's TypeTree
+     nodes to read+write pid=27 and let UnityPy resave the SerializedFile.
+     Atlas / material / fallback PPtrs (pid=10, pid=2, etc.) are preserved
+     so they keep pointing inside resources.assets — only the char/glyph
+     tables are transplanted from the source font.
 
 Usage:
     uv run -m mercstoria font-swap <path-to-font-bundle> [--game-dir <steam install path>]
@@ -209,9 +212,7 @@ def patch_resources_ress_atlas(game_dir, atlas_bytes):
 
 
 def patch_bundle(game_dir, source_font_tt, atlas_bytes):
-    """Patch B — bundle's font asset + both atlas slots inside its archive resS.
-    Returns the patched bundle bytes (in addition to writing to disk) so Patch C
-    can byte-diff against the original to find the changed regions."""
+    """Patch B — bundle's font asset + both atlas slots inside its archive resS."""
     bundle_path = str(_streaming_assets_subpath(game_dir, cfg.FONT_BUNDLE_NAME))
     bak = ensure_bak(bundle_path)
     shutil.copy2(bak, bundle_path)
@@ -251,103 +252,40 @@ def patch_bundle(game_dir, source_font_tt, atlas_bytes):
     return bundle_path
 
 
-def _read_bundle_font_raw(bundle_path):
-    env = UnityPy.load(bundle_path)
-    for o in env.objects:
-        if o.type.name == "MonoBehaviour" and o.path_id == BUNDLE_FONT_PATHID:
-            return o.get_raw_data()
-    raise SystemExit(f"[diff] font asset pathID not found in {bundle_path}")
-
-
 def patch_resources_hidden_font(game_dir, source_font_tt):
     """Patch C — hidden RocknRollStd SDF MonoBehaviour in resources.assets pid=27.
 
-    Strategy: glyph-table-only byte-diff between original-bundle-font and
-    patched-bundle-font (which has the same chars set as the original but with
-    new glyph rects/metrics). Apply those diffs in place over pid=27's bytes
-    inside resources.assets, preserving the file size and every other field
-    (m_Script reference, m_AtlasTextures pid=10, m_FallbackFontAssetTable, etc.).
+    resources.assets is an IL2CPP release SerializedFile with no embedded
+    TypeTree for TMP_FontAsset, so UnityPy cannot parse pid=27 on its own.
+    The bundle copy of the font asset (`84ece16f...bundle`, pathID
+    BUNDLE_FONT_PATHID) DOES embed the TypeTree because asset bundles
+    serialize their own type info. We borrow those nodes to read+write
+    pid=27, then let UnityPy resave the whole resources.assets — the
+    SerializedFile writer recomputes the object table and downstream
+    byte_starts so pid=27 growing past its original size is fine.
 
-    The original and resources.assets copies of the font asset are byte-identical
-    in the structural / glyph-table region (they differ only by 49 bytes of
-    m_Script PPtr near the header), so identical diff offsets apply cleanly.
+    Atlas + material PPtrs in pid=27 must be preserved — they reference
+    pid=10 (atlas Texture2D in resources.assets) and pid=2 (material), not
+    the bundle's internal atlas / material. m_FaceInfo is preserved too,
+    same rationale as Patch B (UI was laid out against the original metrics).
     """
     bundle_path = str(_streaming_assets_subpath(game_dir, cfg.FONT_BUNDLE_NAME))
     bundle_bak = bundle_path + ".bak"
     if not os.path.exists(bundle_bak):
         raise SystemExit("[C] bundle .bak missing — run patch B first")
 
-    # 1. Original bundle font asset raw bytes
-    orig_raw = _read_bundle_font_raw(bundle_bak)
-
-    # 2. Build a "same-chars-new-glyph-rects" font on a fresh copy of the bundle
-    #    (we cannot just reuse the result of patch B because that one has the
-    #    source font's full char table, which changes the byte size and breaks
-    #    the in-place assumption.)
-    import tempfile
-
-    env_o = UnityPy.load(bundle_bak)
-    font_obj = next(
+    env_b = UnityPy.load(bundle_bak)
+    bundle_font_obj = next(
         o
-        for o in env_o.objects
+        for o in env_b.objects
         if o.type.name == "MonoBehaviour" and o.path_id == BUNDLE_FONT_PATHID
     )
-    tt = font_obj.read_typetree()
-
-    # Build unicode -> rect/metrics lookup from the source font
-    src_gi_to_glyph = {g["m_Index"]: g for g in source_font_tt["m_GlyphTable"]}
-    uni_to_rect = {}
-    uni_to_metrics = {}
-    for c in source_font_tt["m_CharacterTable"]:
-        gi = c["m_GlyphIndex"]
-        if gi in src_gi_to_glyph:
-            uni_to_rect[c["m_Unicode"]] = src_gi_to_glyph[gi]["m_GlyphRect"]
-            uni_to_metrics[c["m_Unicode"]] = src_gi_to_glyph[gi]["m_Metrics"]
-
-    # Update each original glyph entry IN PLACE using the source font's rects
-    gi_to_orig_entry = {g["m_Index"]: g for g in tt["m_GlyphTable"]}
-    updated = 0
-    for c in tt["m_CharacterTable"]:
-        uni = c["m_Unicode"]
-        gi = c["m_GlyphIndex"]
-        if uni in uni_to_rect and gi in gi_to_orig_entry:
-            gi_to_orig_entry[gi]["m_GlyphRect"] = uni_to_rect[uni]
-            gi_to_orig_entry[gi]["m_Metrics"] = uni_to_metrics[uni]
-            updated += 1
-    print(
-        f"[C] in-place glyph rect rebuild: updated {updated}"
-        f"/{len(tt['m_CharacterTable'])} chars from source font"
-    )
-    font_obj.save_typetree(tt)
-
-    # 3. Round-trip through disk to actually flush save_typetree's in-memory
-    #    state into bytes (UnityPy's get_raw_data() returns disk content; full
-    #    bundle save is the easiest way to extract the serialized result).
-    with tempfile.NamedTemporaryFile(
-        prefix="merc_font_inplace_", suffix=".bundle", delete=False
-    ) as tmp:
-        tmp.write(env_o.file.save(packer="lz4"))
-        tmp_path = tmp.name
-    try:
-        patched_raw = _read_bundle_font_raw(tmp_path)
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-
-    if len(patched_raw) != len(orig_raw):
+    nodes = bundle_font_obj.serialized_type.nodes
+    if nodes is None:
         raise SystemExit(
-            f"[C] in-place font asset size changed ({len(orig_raw)}"
-            f"->{len(patched_raw)}); source font has different number of chars"
-            f" than original — Patch C requires same chars set. Use only the"
-            f" original 7007 chars in the source font, or extend separately."
+            "[C] bundle font has no embedded TypeTree — cannot parse pid=27"
         )
 
-    diffs = [i for i in range(len(orig_raw)) if orig_raw[i] != patched_raw[i]]
-    print(f"[C] glyph-table diff bytes: {len(diffs)}")
-
-    # 4. Apply diffs in place on resources.assets pid=27
     res_path = str(_data_subpath(game_dir, "resources.assets"))
     res_bak = ensure_bak(res_path)
     shutil.copy2(res_bak, res_path)  # restore for idempotency
@@ -358,26 +296,26 @@ def patch_resources_hidden_font(game_dir, source_font_tt):
         for o in env_r.objects
         if o.type.name == "MonoBehaviour" and o.path_id == RESOURCES_HIDDEN_FONT_PID
     )
-    pid27_offset_in_file = pid27.byte_start
-    orig_pid27_bytes = pid27.get_raw_data()
-    if len(orig_pid27_bytes) != len(orig_raw):
-        raise SystemExit(
-            f"[C] resources.assets pid=27 size {len(orig_pid27_bytes)} !="
-            f" bundle font size {len(orig_raw)} — game version mismatch?"
-        )
 
-    new_pid27 = bytearray(orig_pid27_bytes)
-    for off in diffs:
-        new_pid27[off] = patched_raw[off]
+    tt = pid27.read_typetree(nodes)
+    transplant_keys_into(tt, source_font_tt)
+    pid27.save_typetree(tt, nodes)
 
-    # Write in place; file size unchanged so the SerializedFile header / object
-    # table do not need updating.
-    with open(res_path, "r+b") as f:
-        f.seek(pid27_offset_in_file)
-        f.write(bytes(new_pid27))
+    new_bytes = env_r.file.save()
+    with open(res_path, "wb") as f:
+        f.write(new_bytes)
+
+    fi = tt.get("m_FaceInfo", {})
     print(
-        f"[C] wrote {len(new_pid27)} bytes at offset {pid27_offset_in_file}"
-        f" in resources.assets (file size unchanged)"
+        f"[C] resources.assets pid=27 transplanted: chars="
+        f"{len(tt['m_CharacterTable'])}/{len(tt['m_GlyphTable'])} glyphs,"
+        f" atlas={tt['m_AtlasTextures']}, material={tt['m_Material']}"
+        f"   (preserved m_LineHeight={fi.get('m_LineHeight')},"
+        f" m_PointSize={fi.get('m_PointSize')})"
+    )
+    print(
+        f"[C] resources.assets resaved: {len(new_bytes)} bytes"
+        f" (was {os.path.getsize(res_bak)})"
     )
     return res_path
 
