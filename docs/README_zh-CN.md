@@ -146,6 +146,6 @@ uv run -m mercstoria              # 显示完整子命令列表
 - [x] 单击启动器 —— junction 创建步骤打进了 EXE（CMake 构建，支持 MSVC + MinGW）；启动时强制 D3D11，避免在 NVIDIA fallback 到 OpenGL ES 3 的机器上最终章片尾字幕成块跳过
 - [x] 内嵌 UI 文本 —— 最终章片尾 Timeline 字幕通过 TypeTree 替换（4 个 bundle，44 行）
 - [x] UI 标签 —— 游戏内所有菜单 / HUD / 详情面板标签从 Addressables bundle（`StreamingAssets/aa/`）提取；50 个 bundle，264 条字符串，位于 `extracted_data/ui_labels/`
-- [ ] 国家名 —— 作为 IL2CPP enum 字段名字面量存储在 `global-metadata.dat`（`Country` enum ~0x1371F2，`CountryFilter` ~0x138DBC）；运行时显示 = `Enum.GetName(Country, id) + "の国"`；需直接 patch 二进制文件里的两张表（不涉及 bundle）
+- [ ] 国家名 —— 作为 IL2CPP enum 字段名字面量存储在 `global-metadata.dat`（`Country` enum ~0x1371F2，`CountryFilter` ~0x138DBC）；运行时显示 = `Enum.GetName(Country, id) + "の国"`；用 `mercstoria patch-metadata` 修补（编辑 `scripts/patch_metadata.py` 顶部的 `COUNTRY_NAMES` 字典，约束：译文编码字节数 ≤ 原始字节数）
 - [ ] 图片提取与翻译 —— 找出游戏中含日文的美术资源并替换
 - [ ] 4,000+ 剧情的翻译记忆 + LLM 管线

@@ -150,6 +150,6 @@ The only non-Python prerequisite for the patches themselves is **Il2CppDumper**,
 - [x] Single-click launcher — bundles junction setup into the EXE (CMake-built, MSVC + MinGW); forces D3D11 so the final-chapter cinematic plays at the intended cadence on NVIDIA GPUs that fall back to OpenGL ES 3
 - [x] Inline UI text — final-chapter Timeline cinematic dialogue swapped in via TypeTree (4 bundles, 44 strings)
 - [x] UI labels — all in-game menu/HUD/detail-panel labels extracted from Addressables bundles (`StreamingAssets/aa/`); 50 bundles, 264 strings via `extracted_data/ui_labels/`
-- [ ] Country / nationality names — stored as IL2CPP enum field name literals in `global-metadata.dat` (`Country` enum @ ~0x1371F2, `CountryFilter` @ ~0x138DBC); runtime label = `Enum.GetName(Country, id) + "の国"`; requires patching both tables in the binary directly (no bundle involved)
+- [ ] Country / nationality names — stored as IL2CPP enum field name literals in `global-metadata.dat` (`Country` enum @ ~0x1371F2, `CountryFilter` @ ~0x138DBC); runtime label = `Enum.GetName(Country, id) + "の国"`; patch with `mercstoria patch-metadata` (edit `COUNTRY_NAMES` dict at top of `scripts/patch_metadata.py`, constraint: replacement ≤ original byte count)
 - [ ] Image extraction + translation — find in-game art that contains Japanese text and swap it
 - [ ] Translation memory + LLM pipeline for all 4,000+ stories
