@@ -62,10 +62,12 @@ COUNTRY_NAMES: dict[str, str] = {
     "その他":           "",   # 9 B
 }
 
-# Anchors: the class-name string immediately before each enum's member names.
-# Country and CountryFilter share the same JP member names in the string pool
-# but store them twice (no deduplication between separate enum classes).
+# Suffix appended by CountryEnum.GetLabel: Enum.GetName(Country, id) + COUNTRY_SUFFIX
+# Two occurrences in the stringliteral region (different call sites). Must be <= 6 bytes.
+COUNTRY_SUFFIX: str = ""   # e.g. "之国" (6B) to replace "の国"
+
 _ANCHORS = [b"Country\x00", b"CountryFilter\x00"]
+_SUFFIX_ORIG = "の国".encode("utf-8")   # 6 bytes, E3 81 AE E5 9B BD
 
 
 def _read_block(data: bytes, anchor: bytes):
@@ -96,13 +98,19 @@ def main() -> int:
     data = bytearray(meta.read_bytes())
     translations = {k: v for k, v in COUNTRY_NAMES.items() if v and v != k}
 
-    if not translations:
-        print("COUNTRY_NAMES is empty — showing current values:\n")
+    suffix_repl = COUNTRY_SUFFIX.encode("utf-8") if COUNTRY_SUFFIX else None
+
+    if not translations and not suffix_repl:
+        print("COUNTRY_NAMES and COUNTRY_SUFFIX are empty — showing current values:\n")
         for anchor in _ANCHORS:
             print(f"  [{anchor.decode().rstrip(chr(0))}]")
             for off, name, slot in _read_block(bytes(data), anchor):
                 print(f"    0x{off:06X}  {slot:2d}B  {name!r}")
-        print("\nEdit COUNTRY_NAMES at the top of this script, then re-run.")
+        suffix_offs = [i for i in range(len(data))
+                       if data[i:i+len(_SUFFIX_ORIG)] == _SUFFIX_ORIG]
+        print(f"\n  [suffix 'の国']  {len(suffix_offs)} occurrences: "
+              f"{[hex(x) for x in suffix_offs]}")
+        print("\nEdit COUNTRY_NAMES / COUNTRY_SUFFIX at the top of this script, then re-run.")
         return 0
 
     # Dry run — validate all replacements fit
@@ -124,6 +132,17 @@ def main() -> int:
             if not ok:
                 all_ok = False
 
+    if suffix_repl is not None:
+        if len(suffix_repl) > len(_SUFFIX_ORIG):
+            print(f"\n  [suffix] OVERFLOW: {COUNTRY_SUFFIX!r} is {len(suffix_repl)}B "
+                  f"> {len(_SUFFIX_ORIG)}B")
+            all_ok = False
+        else:
+            n = bytes(data).count(_SUFFIX_ORIG)
+            print(f"\n  [suffix] 'の国' → {COUNTRY_SUFFIX!r}  "
+                  f"({len(suffix_repl)}B <= {len(_SUFFIX_ORIG)}B)  "
+                  f"OK  ({n} occurrences)")
+
     if not all_ok:
         print("\nERROR: shorten the translations marked OVERFLOW and re-run.")
         return 1
@@ -142,6 +161,16 @@ def main() -> int:
         ):
             rb = repl.encode("utf-8")
             buf[off:off + slot] = rb + b"\x00" * (slot - len(rb))
+
+    if suffix_repl is not None:
+        padded = suffix_repl + b"\x00" * (len(_SUFFIX_ORIG) - len(suffix_repl))
+        pos = 0
+        while True:
+            i = bytes(buf).find(_SUFFIX_ORIG, pos)
+            if i < 0:
+                break
+            buf[i:i + len(_SUFFIX_ORIG)] = padded
+            pos = i + len(_SUFFIX_ORIG)
 
     meta.write_bytes(bytes(buf))
     print(f"Patched: {meta}")
