@@ -42,6 +42,7 @@ _HERE = Path(__file__).resolve().parent.parent
 REPACKED_STORY     = _HERE / "repacked_bundles" / "story"
 REPACKED_MISC      = _HERE / "repacked_bundles" / "misc"
 REPACKED_INLINE_UI = _HERE / "repacked_bundles" / "inline_ui"
+REPACKED_UI_LABELS = _HERE / "repacked_bundles" / "ui_labels"
 
 
 def _resolve_paths() -> tuple[Path, Path]:
@@ -115,10 +116,14 @@ def main() -> int:
     n_story = deploy(REPACKED_STORY,     cache_story,  backup_story,  "story")
     n_misc  = deploy(REPACKED_MISC,      cache_master, backup_master, "misc")
     n_ui    = deploy(REPACKED_INLINE_UI, cache_ui,     backup_ui,     "inline-ui")
-    print(f"\nTotal: {n_story + n_misc + n_ui} bundles. Originals mirrored under")
-    print(f"  {backup_root.parent}")
-    print("To roll back: copy AssetBundle_old/ over AssetBundle/.")
-    print("To finalize:  delete AssetBundle_old/.")
+
+    sa_live   = cfg.streaming_assets_dir()
+    sa_backup = cfg.app_data_dir() / "StreamingAssets" / "aa" / "StandaloneWindows64_old"
+    n_labels  = deploy(REPACKED_UI_LABELS, sa_live, sa_backup, "ui-labels")
+
+    print(f"\nTotal: {n_story + n_misc + n_ui + n_labels} bundles. Originals mirrored under")
+    print(f"  {backup_root.parent}  (story/misc/inline-ui)")
+    print(f"  {sa_backup.parent}  (ui-labels → StreamingAssets/aa/)")
     return 0
 
 

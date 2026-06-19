@@ -49,6 +49,9 @@ FINGERPRINTS_PATH = EXTRACT_ROOT / ".fingerprints.pkl"
 
 REPACK_ROOT = _HERE / "repacked_bundles"
 REPACK_INLINE_UI = REPACK_ROOT / "inline_ui"
+REPACK_UI_LABELS = REPACK_ROOT / "ui_labels"
+
+UI_LABELS_OUT = EXTRACT_ROOT / "ui_labels"
 
 
 def has_jp(s: str) -> bool:
@@ -301,3 +304,139 @@ def cmd_repack_ui(force: bool = False):
     print(f"  skipped (unmodified): {skipped}")
     print(f"  failed: {failed}")
     print(f"  output: {REPACK_INLINE_UI}")
+
+
+# === UI Labels (StreamingAssets/aa/StandaloneWindows64) ===
+
+def cmd_extract_ui_labels(yes: bool = False, _skip_confirm: bool = False):
+    """Walk StreamingAssets/aa/StandaloneWindows64/, dump every MonoBehaviour
+    with a JP `m_text` field to extracted_data/ui_labels/<hash>.json.
+
+    These are Addressables UI prefab bundles shipped with the game install
+    (not the CDN cache). They hold all in-game UI labels — unit detail fields,
+    battle HUD, settings, menus, etc. — as TMP_Text MonoBehaviour `m_text`.
+    Deploy repacked bundles with `mercstoria deploy` (writes back to
+    StreamingAssets/aa/StandaloneWindows64/, not to the LocalLow cache).
+    """
+    if not _skip_confirm and not _confirm_overwrite(UI_LABELS_OUT, "ui_labels", yes):
+        return
+    UI_LABELS_OUT.mkdir(parents=True, exist_ok=True)
+    fps = load_fingerprints()
+
+    src_dir = cfg.streaming_assets_dir()
+    if not src_dir.is_dir():
+        raise SystemExit(f"extract-ui-labels: {src_dir} does not exist.")
+
+    bundles = sorted(p for p in src_dir.iterdir() if p.suffix == '.bundle')
+    print(f"Scanning {len(bundles)} StreamingAssets/aa bundles -> {UI_LABELS_OUT}")
+
+    written = total_strings = 0
+    t0 = time.time()
+    for p in tqdm(bundles, desc="extract-ui-labels", unit="bundle"):
+        try:
+            env = UnityPy.load(str(p))
+        except Exception as e:
+            tqdm.write(f"  ERROR loading {p.name}: {e}")
+            continue
+
+        entries = []
+        for obj in env.objects:
+            if obj.type.name != "MonoBehaviour":
+                continue
+            try:
+                tt = obj.read_typetree()
+            except Exception:
+                continue
+            text = tt.get("m_text")
+            if not isinstance(text, str) or not has_jp(text):
+                continue
+            entries.append({
+                "path_id": obj.path_id,
+                "name": tt.get("m_Name", ""),
+                "text": text,
+            })
+
+        if not entries:
+            continue
+
+        entries.sort(key=lambda e: e["path_id"])
+        payload = {"bundle": p.name, "entries": entries}
+        out_path = UI_LABELS_OUT / f"{p.stem}.json"
+        key = f"ui_labels/{out_path.name}"
+        write_json_with_fingerprint(out_path, payload, fps, key)
+        written += 1
+        total_strings += len(entries)
+        tqdm.write(f"  {p.name}  entries={len(entries)}")
+
+    save_fingerprints(fps)
+    print(f"\nDone in {time.time() - t0:.1f}s. "
+          f"Wrote {written} ui-labels JSONs, {total_strings} strings total.")
+
+
+def cmd_repack_ui_labels(force: bool = False):
+    """Repack modified ui_labels JSONs into repacked_bundles/ui_labels/.
+
+    Applies `m_text` edits via TypeTree. Source bundles read from
+    StreamingAssets/aa/StandaloneWindows64/; output lands in
+    repacked_bundles/ui_labels/ for `mercstoria deploy` to push back.
+    """
+    if not UI_LABELS_OUT.is_dir():
+        print(f"ERROR: {UI_LABELS_OUT} does not exist; run `extract-ui-labels` first.")
+        sys.exit(1)
+    REPACK_UI_LABELS.mkdir(parents=True, exist_ok=True)
+    fps = load_fingerprints()
+
+    src_dir = cfg.streaming_assets_dir()
+    json_files = sorted(p for p in UI_LABELS_OUT.iterdir()
+                        if p.suffix == '.json' and not p.name.startswith('_'))
+
+    repacked = skipped = failed = 0
+    t0 = time.time()
+    for jp in tqdm(json_files, desc="repack-ui-labels", unit="json"):
+        key = f"ui_labels/{jp.name}"
+        if not _is_modified(jp, key, fps, force):
+            skipped += 1
+            continue
+        try:
+            with open(jp, 'rb') as f:
+                payload = json.loads(f.read().decode('utf-8'))
+        except Exception as e:
+            tqdm.write(f"  ERROR reading {jp.name}: {e}")
+            failed += 1
+            continue
+
+        bundle_name = payload.get("bundle")
+        src = src_dir / bundle_name
+        dst = REPACK_UI_LABELS / bundle_name
+        if not src.is_file():
+            tqdm.write(f"  ERROR {jp.name}: source bundle {src} not found")
+            failed += 1
+            continue
+
+        try:
+            env = UnityPy.load(str(src))
+            edits = {e["path_id"]: e["text"] for e in payload.get("entries", [])}
+            applied = 0
+            for obj in env.objects:
+                if obj.path_id not in edits:
+                    continue
+                tt = obj.read_typetree()
+                tt["m_text"] = edits[obj.path_id]
+                obj.save_typetree(tt)
+                applied += 1
+            if applied != len(edits):
+                tqdm.write(f"  WARN {bundle_name}: applied {applied}/{len(edits)} entries")
+            with open(dst, 'wb') as f:
+                f.write(env.file.save(packer='lz4'))
+            fps[key] = sha256_file(jp)
+            repacked += 1
+            tqdm.write(f"  {bundle_name} <- {jp.name}  ({applied} edits)")
+        except Exception as e:
+            tqdm.write(f"  ERROR {bundle_name}: {e}")
+            failed += 1
+
+    if repacked:
+        save_fingerprints(fps)
+    print(f"\nUI-labels repack done in {time.time() - t0:.1f}s.")
+    print(f"  repacked: {repacked}, skipped (unmodified): {skipped}, failed: {failed}")
+    print(f"  output: {REPACK_UI_LABELS}")

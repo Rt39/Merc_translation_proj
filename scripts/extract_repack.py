@@ -770,6 +770,8 @@ def cmd_extract(yes: bool = False):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     mod.cmd_extract_ui(yes=yes, _skip_confirm=True)
+    print()
+    mod.cmd_extract_ui_labels(yes=yes, _skip_confirm=True)
 
 
 def _is_modified(path: str, key: str, fps: dict, force: bool) -> bool:
@@ -937,6 +939,8 @@ def cmd_repack(force: bool = False):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     mod.cmd_repack_ui(force=force)
+    print()
+    mod.cmd_repack_ui_labels(force=force)
 
 
 def cmd_test_repack():

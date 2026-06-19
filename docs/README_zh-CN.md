@@ -84,7 +84,7 @@ workshop/
 │   ├── patch_offline.py        Steam 绕过 + 证书跳过 + GetAsync（8 处）
 │   ├── verify_patches.py       两套修补的只读检查
 │   ├── extract_repack.py       剧情 + 15 个 master bundle 的 extract / repack
-│   ├── extract_ui.py           内嵌 UI 文本辅助（Timeline 片尾字幕，被 extract/repack 调用）
+│   ├── extract_ui.py           内嵌 UI 文本 + UI 标签辅助（被 extract/repack/deploy 调用）
 │   ├── check_roundtrip.py      对前 N 个 story bundle 做 Reader/Writer 一致性检查
 │   ├── deploy.py               把重打包的 bundle 推到 <game>/AssetBundle（原文件镜像到 AssetBundle_old/）
 │   ├── bundle_cache.py         把 %LocalLow%/.../AssetBundle 拷到 <game>/AssetBundle
@@ -145,5 +145,7 @@ uv run -m mercstoria              # 显示完整子命令列表
 - [x] 自包含安装 —— 缓存通过 NTFS junction 实际位于游戏目录内
 - [x] 单击启动器 —— junction 创建步骤打进了 EXE（CMake 构建，支持 MSVC + MinGW）；启动时强制 D3D11，避免在 NVIDIA fallback 到 OpenGL ES 3 的机器上最终章片尾字幕成块跳过
 - [x] 内嵌 UI 文本 —— 最终章片尾 Timeline 字幕通过 TypeTree 替换（4 个 bundle，44 行）
+- [x] UI 标签 —— 游戏内所有菜单 / HUD / 详情面板标签从 Addressables bundle（`StreamingAssets/aa/`）提取；50 个 bundle，264 条字符串，位于 `extracted_data/ui_labels/`
+- [ ] 国家名 —— 作为 IL2CPP enum 字段名字面量存储在 `global-metadata.dat`（`Country` enum ~0x1371F2，`CountryFilter` ~0x138DBC）；运行时显示 = `Enum.GetName(Country, id) + "の国"`；需直接 patch 二进制文件里的两张表（不涉及 bundle）
 - [ ] 图片提取与翻译 —— 找出游戏中含日文的美术资源并替换
 - [ ] 4,000+ 剧情的翻译记忆 + LLM 管线
