@@ -2,12 +2,13 @@
 
 Runs every step a translator needs BEFORE editing JSONs:
 
-    1. patch-crc      — disable Unity's bundle CRC validation
-    2. patch-offline  — Steam bypass + cert skip + file-read GetAsync
-    3. font-swap      — replace TMP font (atlas + bundle + hidden font)
-    4. extract        — dump every story + 15 master bundles to extracted_data/
-    5. bundle-cache   — copy LocalLow CDN cache into <game>/AssetBundle/    (optional)
-    6. deploy-launcher — drop launcher.exe into the game folder              (optional)
+    1. patch-crc       — disable Unity's bundle CRC validation
+    2. patch-offline   — Steam bypass + cert skip + file-read GetAsync
+    3. patch-metadata  — country/nationality enum names in global-metadata.dat (optional)
+    4. font-swap       — replace TMP font (atlas + bundle + hidden font)
+    5. extract         — dump every story + 15 master bundles to extracted_data/
+    6. bundle-cache    — copy LocalLow CDN cache into <game>/AssetBundle/    (optional)
+    7. deploy-launcher — drop launcher.exe into the game folder              (optional)
 
 Each step is idempotent — re-running skips work that's already done. Skip
 individual steps with `--skip-<name>` (e.g. `--skip-bundle-cache` if you
@@ -92,8 +93,13 @@ def step_patch_offline() -> None:
     _run_script("patch_offline", [])
 
 
+def step_patch_metadata() -> None:
+    _step("Step 3/7 — country enum names (global-metadata.dat)")
+    _run_script("patch_metadata", [])
+
+
 def step_font_swap() -> None:
-    _step("Step 3/6 — font swap (atlas + bundle + hidden font)")
+    _step("Step 4/7 — font swap (atlas + bundle + hidden font)")
     if not LOGOFONT_BUNDLE.is_file():
         raise SystemExit(
             f"setup: {LOGOFONT_BUNDLE} not found. The repo ships a prebuilt "
@@ -104,7 +110,7 @@ def step_font_swap() -> None:
 
 
 def step_extract(yes: bool) -> None:
-    _step("Step 4/6 — extract stories + 15 master bundles")
+    _step("Step 5/7 — extract stories + 15 master bundles")
     args = ["extract"]
     if yes:
         args.append("--yes")
@@ -112,7 +118,7 @@ def step_extract(yes: bool) -> None:
 
 
 def step_bundle_cache(yes: bool) -> None:
-    _step("Step 5/6 — bundle LocalLow cache into the game folder")
+    _step("Step 6/7 — bundle LocalLow cache into the game folder")
     args = []
     if yes:
         args.append("--yes")
@@ -120,7 +126,7 @@ def step_bundle_cache(yes: bool) -> None:
 
 
 def step_deploy_launcher() -> None:
-    _step("Step 6/6 — deploy launcher to the game folder")
+    _step("Step 7/7 — deploy launcher to the game folder")
     if not LAUNCHER_EXE.is_file():
         raise SystemExit(
             f"setup: {LAUNCHER_EXE} not found. Build it with\n"
@@ -150,6 +156,7 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--skip-crc",          action="store_true", help="Skip CRC bypass.")
     ap.add_argument("--skip-offline",      action="store_true", help="Skip offline-mode patches.")
+    ap.add_argument("--skip-metadata",     action="store_true", help="Skip country enum name patch.")
     ap.add_argument("--skip-font",         action="store_true", help="Skip font swap.")
     ap.add_argument("--skip-extract",      action="store_true", help="Skip JSON extraction.")
     ap.add_argument("--skip-bundle-cache", action="store_true", help="Skip LocalLow→game cache copy.")
@@ -167,6 +174,8 @@ def main() -> int:
         step_patch_crc()
     if not args.skip_offline:
         step_patch_offline()
+    if not args.skip_metadata:
+        step_patch_metadata()
     if not args.skip_font:
         step_font_swap()
     if not args.skip_extract:

@@ -42,10 +42,11 @@ The toolkit collapses into two commands:
                      │
                      ├── 1. patch-crc           (4 sites)
                      ├── 2. patch-offline       (8 sites — Steam bypass + cert + GetAsync)
-                     ├── 3. font-swap           (atlas + bundle + hidden font, uses logofont.bundle)
-                     ├── 4. extract             (4,008 stories + 15 master bundles → extracted_data/)
-                     ├── 5. bundle-cache        (LocalLow → <game>/AssetBundle)
-                     └── 6. deploy launcher     (drop launcher.exe as メルストM_chs.exe — original untouched)
+                     ├── 3. patch-metadata      (country enum names in global-metadata.dat)
+                     ├── 4. font-swap           (atlas + bundle + hidden font, uses logofont.bundle)
+                     ├── 5. extract             (4,008 stories + 15 master bundles → extracted_data/)
+                     ├── 6. bundle-cache        (LocalLow → <game>/AssetBundle)
+                     └── 7. deploy launcher     (drop launcher.exe as メルストM_chs.exe — original untouched)
 
        (translator edits values in place under extracted_data/)
 

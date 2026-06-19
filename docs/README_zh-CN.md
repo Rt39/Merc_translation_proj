@@ -40,10 +40,11 @@
                      │
                      ├── 1. patch-crc           （4 处 CRC 绕过）
                      ├── 2. patch-offline       （8 处：Steam 绕过 + 证书跳过 + GetAsync）
-                     ├── 3. font-swap           （atlas + bundle + 隐藏字体，复用 logofont.bundle）
-                     ├── 4. extract             （4,008 剧情 + 15 master bundle → extracted_data/）
-                     ├── 5. bundle-cache        （LocalLow → <game>/AssetBundle）
-                     └── 6. deploy launcher     （把 launcher.exe 复制为 メルストM_chs.exe，原版不动）
+                     ├── 3. patch-metadata      （global-metadata.dat 国家 enum 名称）
+                     ├── 4. font-swap           （atlas + bundle + 隐藏字体，复用 logofont.bundle）
+                     ├── 5. extract             （4,008 剧情 + 15 master bundle → extracted_data/）
+                     ├── 6. bundle-cache        （LocalLow → <game>/AssetBundle）
+                     └── 7. deploy launcher     （把 launcher.exe 复制为 メルストM_chs.exe，原版不动）
 
        （译者就地修改 extracted_data/ 下的 JSON）
 
