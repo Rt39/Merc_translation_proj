@@ -45,9 +45,9 @@ ROOT = Path(__file__).resolve().parent.parent
 TOOLS = ROOT / "tools"
 OUT = TOOLS / "target_chars.txt"
 
-ATLAS_CEILING = 7800  # empirical: real 32pt SDF + padding=5 fits ~7,900 glyphs.
-                      # Leave a few hundred chars of headroom so TryAddCharacters
-                      # doesn't drop high-codepoint chars when the atlas saturates.
+ATLAS_CEILING = 8000  # empirical: real 32pt SDF + padding=5 tops out around
+                      # 8,000 glyphs. 7800 + ~180 missing-from-corpus chars
+                      # just fits under that ceiling.
 
 
 def _load_lines_first_column(path: Path) -> set[str]:
@@ -105,8 +105,12 @@ def _scan_translation_files(root: Path) -> set[str]:
 
 
 def _scan_corpus(corpus_dir: Path) -> set[str]:
-    """Union of every codepoint that appears in the `value` field of any
-    extracted story / misc JSON. Optional belt-and-braces tier."""
+    """Union of every codepoint that appears in any string leaf of any
+    extracted JSON. Walks the full tree (not just `value` keys) so the
+    story bundles' `Text` / `Speakers` / scene strings and the inline-UI
+    `text` / ui-labels payloads are all covered alongside the offset-
+    schema misc `strings[*].value`. Picks up ASCII / metadata too, which
+    is harmless — those codepoints are already in the REQUIRED tier."""
     chars: set[str] = set()
     for jf in corpus_dir.rglob("*.json"):
         try:
@@ -116,13 +120,13 @@ def _scan_corpus(corpus_dir: Path) -> set[str]:
 
         def _walk(node):  # noqa: ANN001
             if isinstance(node, dict):
-                if "value" in node and isinstance(node["value"], str):
-                    chars.update(node["value"])
                 for v in node.values():
                     _walk(v)
             elif isinstance(node, list):
                 for v in node:
                     _walk(v)
+            elif isinstance(node, str):
+                chars.update(node)
 
         _walk(data)
     return chars
