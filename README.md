@@ -68,6 +68,25 @@ Underlying steps are also exposed individually (`patch-crc`, `extract`,
 `repack`, `deploy`, `font-swap`, ...) — see `mercstoria` with no args for the
 full list.
 
+For distributing translation updates, `mercstoria update` packages every
+bundle that has been repacked since the previous `update` run into a
+timestamped drop-in tree under `update/<ts>/` laid out relative to the game
+install root:
+
+```
+update/<ts>/
+├── AssetBundle/StandaloneWindows64/{StoryMasterData,MasterData,BundleAssets}/...
+└── <APP>_Data/StreamingAssets/aa/StandaloneWindows64/...
+```
+
+Post-`setup` the game reads everything out of `<game>/AssetBundle/` (NTFS
+junction set up by `bundle-cache`) and `<game>/<APP>_Data/StreamingAssets/`,
+so receivers drop the whole `update/<ts>/` contents on top of the game root
+in one go. The diff baseline is a snapshot of
+`extracted_data/.fingerprints.pkl` stored at `update/.update_snapshot.pkl`;
+delete it — or pass `--force` — to re-export every bundle currently in
+`repacked_bundles/`.
+
 > All scripts are invoked through the `mercstoria` package entry point: `uv run -m mercstoria <subcommand> [args]`. Run with no args to see the full subcommand list.
 
 ## Project layout
@@ -88,7 +107,7 @@ workshop/
 │   ├── patch_crc.py            CRC bypass (4 sites)
 │   ├── patch_offline.py        Steam bypass + cert skip + GetAsync (8 sites)
 │   ├── verify_patches.py       read-only check on both patch sets
-│   ├── extract_repack.py       extract / repack stories + 15 master bundles
+│   ├── extract_repack.py       extract / repack / update stories + 15 master bundles
 │   ├── extract_ui.py           inline UI text + UI label helpers (called by extract/repack/deploy)
 │   ├── check_roundtrip.py      sanity-check Reader/Writer on N story bundles
 │   ├── deploy.py               push repacked bundles into <game>/AssetBundle (mirrors originals to AssetBundle_old/)
@@ -151,6 +170,6 @@ The only non-Python prerequisite for the patches themselves is **Il2CppDumper**,
 - [x] Single-click launcher — bundles junction setup into the EXE (CMake-built, MSVC + MinGW); forces D3D11 so the final-chapter cinematic plays at the intended cadence on NVIDIA GPUs that fall back to OpenGL ES 3
 - [x] Inline UI text — final-chapter Timeline cinematic dialogue swapped in via TypeTree (4 bundles, 44 strings)
 - [x] UI labels — all in-game menu/HUD/detail-panel labels extracted from Addressables bundles (`StreamingAssets/aa/`); 50 bundles, 264 strings via `extracted_data/ui_labels/`
-- [ ] Country / nationality names — stored as IL2CPP enum field name literals in `global-metadata.dat` (`Country` enum @ ~0x1371F2, `CountryFilter` @ ~0x138DBC); runtime label = `Enum.GetName(Country, id) + "の国"`; patch with `mercstoria patch-metadata` (edit `COUNTRY_NAMES` dict at top of `scripts/patch_metadata.py`, constraint: replacement ≤ original byte count)
+- [x] Country / nationality names — stored as IL2CPP enum field name literals in `global-metadata.dat` (`Country` enum @ ~0x1371F2, `CountryFilter` @ ~0x138DBC); runtime label = `Enum.GetName(Country, id) + "の国"`; patch with `mercstoria patch-metadata` (edit `COUNTRY_NAMES` dict at top of `scripts/patch_metadata.py`)
 - [ ] Image extraction + translation — find in-game art that contains Japanese text and swap it
 - [ ] Translation memory + LLM pipeline for all 4,000+ stories

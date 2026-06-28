@@ -64,6 +64,16 @@
 底层各步骤也都对外暴露（`patch-crc`、`extract`、`repack`、`deploy`、`font-swap`……），
 不带参数运行 `mercstoria` 可看完整子命令列表。
 
+如果只想把翻译更新打成一个增量包发出去，用 `mercstoria update`：它会把"自上次 `update` 以来被 repack 过"的 bundle 全部按**游戏安装目录**布局放到 `update/<时间戳>/` 下：
+
+```
+update/<ts>/
+├── AssetBundle/StandaloneWindows64/{StoryMasterData,MasterData,BundleAssets}/...
+└── <APP>_Data/StreamingAssets/aa/StandaloneWindows64/...
+```
+
+`setup` 跑过之后游戏会从 `<game>/AssetBundle/`（由 `bundle-cache` 建好的 NTFS junction）和 `<game>/<APP>_Data/StreamingAssets/` 读取所有资源，不会再回 LocalLow 找。所以收件人把整个 `update/<ts>/` 的内容直接覆盖到游戏安装根目录即可，一步到位。增量基线是 `extracted_data/.fingerprints.pkl` 在上次 update 时的快照，存于 `update/.update_snapshot.pkl`；删掉它——或者加 `--force`——即可把 `repacked_bundles/` 里现有的全部 bundle 重新打成一份完整包。
+
 > 所有脚本都通过 `mercstoria` 包入口调用：`uv run -m mercstoria <subcmd> [args]`。不带参数运行可看到完整子命令列表。
 
 ## 项目结构
@@ -84,7 +94,7 @@ workshop/
 │   ├── patch_crc.py            CRC 绕过（4 处）
 │   ├── patch_offline.py        Steam 绕过 + 证书跳过 + GetAsync（8 处）
 │   ├── verify_patches.py       两套修补的只读检查
-│   ├── extract_repack.py       剧情 + 15 个 master bundle 的 extract / repack
+│   ├── extract_repack.py       剧情 + 15 个 master bundle 的 extract / repack / update
 │   ├── extract_ui.py           内嵌 UI 文本 + UI 标签辅助（被 extract/repack/deploy 调用）
 │   ├── check_roundtrip.py      对前 N 个 story bundle 做 Reader/Writer 一致性检查
 │   ├── deploy.py               把重打包的 bundle 推到 <game>/AssetBundle（原文件镜像到 AssetBundle_old/）
@@ -120,7 +130,7 @@ uv run -m mercstoria <subcommand> [args]
 uv run -m mercstoria              # 显示完整子命令列表
 ```
 
-启动器需要 CMake ≥ 3.20，以及 MSVC（Visual Studio 2022 Build Tools 或更新）或 MinGW 二选一。构建命令见 [`../launcher/README.md`](../launcher/README.md)。
+启动器需要 CMake ≥ 3.20，以及 MSVC（Visual Studio 2022 Build Tools 或更新）或 MinGW 二选一。构建命令见 [`../launcher/README_zh-CN.md`](../launcher/README_zh-CN.md)。
 
 修补脚本本身的唯一非 Python 依赖是 **Il2CppDumper**，仅在定位修补点时使用一次。
 
@@ -147,6 +157,6 @@ uv run -m mercstoria              # 显示完整子命令列表
 - [x] 单击启动器 —— junction 创建步骤打进了 EXE（CMake 构建，支持 MSVC + MinGW）；启动时强制 D3D11，避免在 NVIDIA fallback 到 OpenGL ES 3 的机器上最终章片尾字幕成块跳过
 - [x] 内嵌 UI 文本 —— 最终章片尾 Timeline 字幕通过 TypeTree 替换（4 个 bundle，44 行）
 - [x] UI 标签 —— 游戏内所有菜单 / HUD / 详情面板标签从 Addressables bundle（`StreamingAssets/aa/`）提取；50 个 bundle，264 条字符串，位于 `extracted_data/ui_labels/`
-- [ ] 国家名 —— 作为 IL2CPP enum 字段名字面量存储在 `global-metadata.dat`（`Country` enum ~0x1371F2，`CountryFilter` ~0x138DBC）；运行时显示 = `Enum.GetName(Country, id) + "の国"`；用 `mercstoria patch-metadata` 修补（编辑 `scripts/patch_metadata.py` 顶部的 `COUNTRY_NAMES` 字典，约束：译文编码字节数 ≤ 原始字节数）
+- [x] 国家名 —— 作为 IL2CPP enum 字段名字面量存储在 `global-metadata.dat`（`Country` enum ~0x1371F2，`CountryFilter` ~0x138DBC）；运行时显示 = `Enum.GetName(Country, id) + "の国"`；用 `mercstoria patch-metadata` 修补（编辑 `scripts/patch_metadata.py` 顶部的 `COUNTRY_NAMES` 字典）
 - [ ] 图片提取与翻译 —— 找出游戏中含日文的美术资源并替换
 - [ ] 4,000+ 剧情的翻译记忆 + LLM 管线

@@ -37,6 +37,7 @@ extracted_data/
 extracted_data_pristine/
 repacked_bundles/
 masterdata_scan.json
+update/
 
 # Generic scratch-script patterns. Anything ad-hoc / exploratory matching
 # these prefixes is left out of git unless explicitly `git add -f`'d.

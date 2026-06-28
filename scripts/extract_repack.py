@@ -25,6 +25,16 @@ Usage
     uv run -m mercstoria repack
         Repack everything modified into repacked_bundles/{story,misc,inline_ui}/.
 
+    uv run -m mercstoria update
+        Collect every bundle repacked since the previous `update` run into
+        update/<timestamp>/ laid out to mirror the game install directory.
+        Post-junction the game reads everything from <game>/AssetBundle/...
+        and <game>/<APP>_Data/StreamingAssets/..., so the update tree is a
+        single overlay the translator copies straight on top of the game
+        root. Diff baseline is a snapshot of .fingerprints.pkl stored at
+        update/.update_snapshot.pkl; delete it (or pass --force) to
+        re-export every bundle currently in repacked_bundles/.
+
     uv run -m mercstoria test-repack
         Round-trip a single bundle to confirm the pipeline.
 
@@ -62,7 +72,7 @@ Data format: MemoryPack (UTF-8 mode)
     Null:    int32(-1)
     Empty:   int32(0)
 """
-import sys, struct, os, json, time, argparse, pickle, hashlib
+import sys, struct, os, json, time, argparse, pickle, hashlib, shutil, datetime
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding as sym_padding
@@ -943,6 +953,191 @@ def cmd_repack(force: bool = False):
     mod.cmd_repack_ui_labels(force=force)
 
 
+# === Update (incremental drop-in) ===
+#
+# `update` packages the bundles that got repacked since the last `update` run
+# into a directory tree that mirrors the live game's resource layout, so the
+# translator can copy the contents straight over the install + persistentData.
+#
+# `repack` flattens output into `repacked_bundles/{story,misc,inline_ui,
+# ui_labels}/` and overwrites each run, so the structure / freshness signal
+# we need lives elsewhere. We piggyback on `.fingerprints.pkl` — repack
+# advances each JSON's fingerprint on a successful pack, so a snapshot of
+# that dict taken at update time captures exactly "what was packed as of
+# this drop". The next update diffs the current fingerprints against the
+# snapshot and pulls the matching bundles out of `repacked_bundles/`.
+
+UPDATE_ROOT = os.path.join(OUTPUT_DIR, "update")
+UPDATE_SNAPSHOT = os.path.join(UPDATE_ROOT, ".update_snapshot.pkl")
+# Older versions kept the snapshot at the repo root; migrate transparently
+# on first load so existing users don't lose their diff baseline.
+_LEGACY_UPDATE_SNAPSHOT = os.path.join(OUTPUT_DIR, ".update_snapshot.pkl")
+
+# JSON-key category prefix -> (repacked_bundles subdir, drop-in subpath
+# relative to the game install root). Post-junction the game no longer
+# reads from %USERPROFILE%/AppData/LocalLow/...; AssetBundle/ under the
+# game folder IS the cache, so the update tree is a single subtree the
+# translator can copy straight on top of the game directory. `ui_labels`
+# resolves its app-data subdir name at runtime via cfg.app_data_dir().
+_UPDATE_LAYOUT = {
+    "story":     ("story",     "AssetBundle/StandaloneWindows64/StoryMasterData"),
+    "misc":      ("misc",      "AssetBundle/StandaloneWindows64/MasterData"),
+    "inline_ui": ("inline_ui", "AssetBundle/StandaloneWindows64/BundleAssets"),
+    "ui_labels": ("ui_labels", None),
+}
+
+
+def _load_update_snapshot() -> dict:
+    """Fingerprints dict snapshotted at the previous `update` run. Empty on
+    first run (everything currently in repacked_bundles/ ships)."""
+    path = UPDATE_SNAPSHOT
+    if not os.path.exists(path) and os.path.exists(_LEGACY_UPDATE_SNAPSHOT):
+        path = _LEGACY_UPDATE_SNAPSHOT
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, 'rb') as f:
+            return pickle.load(f)
+    except Exception:
+        return {}
+
+
+def _save_update_snapshot(m: dict):
+    os.makedirs(UPDATE_ROOT, exist_ok=True)
+    with open(UPDATE_SNAPSHOT, 'wb') as f:
+        pickle.dump(m, f)
+    # Clean up the pre-move location if it's still around — once the new
+    # snapshot is on disk the legacy file is redundant and otherwise
+    # confuses `git status`.
+    if os.path.exists(_LEGACY_UPDATE_SNAPSHOT):
+        try:
+            os.remove(_LEGACY_UPDATE_SNAPSHOT)
+        except OSError:
+            pass
+
+
+def _bundle_name_from_json(category: str, json_name: str) -> str | None:
+    """Resolve the bundle filename a translator JSON repacks into.
+
+    For every category the JSON payload carries a `bundle` field
+    (`story`/`misc` from cmd_extract_*, `inline_ui`/`ui_labels` from
+    extract_ui.py), so we don't need to hard-code naming conventions —
+    just open the file and read it. Returns `None` if the JSON is missing
+    or doesn't carry a bundle field.
+    """
+    src_map = {
+        "story": STORY_OUT,
+        "misc": MISC_OUT,
+        "inline_ui": os.path.join(EXTRACT_ROOT, "inline_ui"),
+        "ui_labels": os.path.join(EXTRACT_ROOT, "ui_labels"),
+    }
+    base = src_map.get(category)
+    if not base:
+        return None
+    p = os.path.join(base, json_name)
+    if not os.path.exists(p):
+        return None
+    try:
+        with open(p, 'rb') as f:
+            doc = json.loads(f.read().decode('utf-8'))
+        return doc.get("bundle")
+    except Exception:
+        return None
+
+
+def cmd_update(skip_repack: bool = False, force: bool = False):
+    """`update` command: collect every bundle that got repacked since the
+    last `update` run and arrange them under the game install root layout.
+
+    Flow:
+      1. Run `repack` first (idempotent — unchanged JSONs are skipped) so
+         that `repacked_bundles/` and `.fingerprints.pkl` reflect every
+         edit the translator has made. Skip with `--no-repack`.
+      2. Diff `.fingerprints.pkl` against the `.update_snapshot.pkl`
+         baseline. Any key whose hash advanced was repacked in this window.
+         With `--force`, skip the diff entirely and package every bundle
+         currently present in `repacked_bundles/`.
+      3. Resolve each changed key's bundle filename from the JSON's own
+         `"bundle"` field and copy from `repacked_bundles/<cat>/` into
+         update/<ts>/<game-relative path>/.
+      4. Replace the snapshot with the current fingerprints dict on success.
+    """
+    if not skip_repack:
+        print("[update] running repack first to pick up any unpacked edits...")
+        cmd_repack()
+        print()
+
+    current = load_fingerprints()
+    snapshot = _load_update_snapshot()
+    if force:
+        print("[update] --force: ignoring snapshot, re-exporting every packed bundle.")
+
+    try:
+        app_data_name = cfg.app_data_dir().name
+    except Exception:
+        app_data_name = "MercStoria_Data"
+    ui_labels_subpath = f"{app_data_name}/StreamingAssets/aa/StandaloneWindows64"
+
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_root = os.path.join(UPDATE_ROOT, ts)
+
+    changed = []
+    missing = []
+    for key, sha in sorted(current.items()):
+        if not force and snapshot.get(key) == sha:
+            continue
+        category, _, json_name = key.partition("/")
+        layout = _UPDATE_LAYOUT.get(category)
+        if not layout:
+            continue
+        subdir, dest_rel = layout
+        target_rel = dest_rel if dest_rel is not None else ui_labels_subpath
+        bundle = _bundle_name_from_json(category, json_name)
+        if not bundle:
+            missing.append((key, "no bundle field in JSON"))
+            continue
+        src = os.path.join(REPACK_ROOT, subdir, bundle)
+        if not os.path.exists(src):
+            missing.append((key, f"not in repacked_bundles/{subdir}/"))
+            continue
+        dst = os.path.join(out_root, target_rel, bundle)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(src, dst)
+        changed.append((key, dst))
+
+    if not changed:
+        print("No repack activity since the last update — nothing to package.")
+        if missing:
+            print(f"  ({len(missing)} JSON(s) changed but no matching bundle in repacked_bundles/ — "
+                  "did you forget to run `repack`?)")
+        if os.path.isdir(out_root) and not any(os.scandir(out_root)):
+            os.rmdir(out_root)
+        return
+
+    readme = (
+        "Drop-in update generated by extract_repack.py update.\n"
+        f"Timestamp: {ts}\n\n"
+        "Copy the contents of this directory on top of the game install root.\n"
+        "The game reads bundles from <game>/AssetBundle/... (NTFS junction\n"
+        "set up by `mercstoria setup`), so a single overlay covers everything.\n\n"
+        "Bundles included:\n"
+    ) + "\n".join(f"  {k}" for k, _ in changed) + "\n"
+    with open(os.path.join(out_root, "README.txt"), 'w', encoding='utf-8') as f:
+        f.write(readme)
+
+    # Snapshot the *current* fingerprints, not a key-by-key merge: that way
+    # an unchanged-but-previously-tracked file stays unchanged in the next
+    # diff, and entries deleted from .fingerprints.pkl drop out cleanly.
+    _save_update_snapshot(dict(current))
+    print(f"Packaged {len(changed)} changed bundle(s) -> {out_root}")
+    for key, dst in changed:
+        print(f"  {key}  ->  {os.path.relpath(dst, out_root)}")
+    if missing:
+        print(f"\n  Skipped {len(missing)} JSON change(s) with no matching bundle:")
+        for key, why in missing:
+            print(f"    {key}  ({why})")
+
+
 def cmd_test_repack():
     """Round-trip a single bundle through the full-schema pipeline:
     parse with Reader, mutate the first non-empty Text via the dict, write
@@ -987,15 +1182,21 @@ def cmd_test_repack():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Merc Storia Translation Toolkit")
-    parser.add_argument("command", choices=["extract", "repack", "test-repack"])
+    parser.add_argument("command", choices=["extract", "repack", "update", "test-repack"])
     parser.add_argument("--force", action="store_true",
-                        help="Repack even files whose hash matches the recorded baseline.")
+                        help="repack: repack even files whose hash matches the recorded baseline. "
+                             "update: re-export every bundle currently in repacked_bundles/ "
+                             "instead of just those packed since the last update snapshot.")
     parser.add_argument("--yes", "-y", action="store_true",
                         help="Auto-confirm the extracted_data overwrite prompt.")
+    parser.add_argument("--no-repack", action="store_true",
+                        help="(update only) Skip the implicit repack step.")
     args = parser.parse_args()
     if args.command == "extract":
         cmd_extract(yes=args.yes)
     elif args.command == "repack":
         cmd_repack(force=args.force)
+    elif args.command == "update":
+        cmd_update(skip_repack=args.no_repack, force=args.force)
     elif args.command == "test-repack":
         cmd_test_repack()

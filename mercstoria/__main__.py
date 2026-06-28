@@ -23,6 +23,7 @@ SUBCOMMANDS = {
     "release":         ("release",         "End-to-end post-translation: repack changed JSONs + deploy to cache"),
     "extract":         ("extract_repack",  "Extract story + misc + inline UI to extracted_data/"),
     "repack":          ("extract_repack",  "Repack story + misc + inline UI to repacked_bundles/"),
+    "update":          ("extract_repack",  "Package bundles repacked since last update into a drop-in tree under update/"),
     "deploy":          ("deploy",          "Deploy repacked_bundles/ to the live cache"),
     "bundle-cache":    ("bundle_cache",    "Bundle the LocalLow CDN cache into the game folder for offline mode"),
     "font-swap":       ("font_swap",       "Replace the in-game font atlas"),
@@ -56,7 +57,7 @@ def main(argv: list[str] | None = None) -> int:
         script = SUBCOMMANDS[subcmd][0]
         # extract / repack share the extract_repack.py script — its argparse
         # expects the verb as the first positional.
-        if subcmd in ("extract", "repack"):
+        if subcmd in ("extract", "repack", "update"):
             forward = [subcmd] + forward
     else:
         print(f"unknown subcommand: {subcmd!r}\n", file=sys.stderr)
