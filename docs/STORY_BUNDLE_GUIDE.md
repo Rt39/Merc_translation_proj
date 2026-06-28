@@ -209,6 +209,9 @@ Vanilla = 4 bundles, 44 strings.
   same `mc` on write.
 - **Empty `Speakers` is legit** — narrator lines have `Speakers: []` +
   non-null `Text`. Accept `count = 0`.
+- **The 2241 BGM mute issue is a vanilla data bug** — the oversized
+  `Mute` at the start of `StoryYamlData_2241` can break BGM after skip;
+  it is not introduced by the translation patch.
 - **TextAsset name has 4-byte padding** — UnityPy handles it via
   `obj.read()`; don't read raw bytes.
 - **`env.file.save(packer="lz4")`, not `"lz4hc"`.** UnityPy's bundled

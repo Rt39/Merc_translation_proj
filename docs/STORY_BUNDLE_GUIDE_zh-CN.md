@@ -191,6 +191,8 @@ JSON,新 IV 加密,写出 `UnityFS(lz4)` bundle。只重打 JSON 自上次 repac
 - **截断对象很常见**:读时 `min(mc, 声明字段数)`,写时按同样 `mc` 回放。
 - **空 `Speakers` 是合法的** —— 旁白行就是 `Speakers: []` + 非空 `Text`。
   接受 `count = 0`。
+- **2241 的 BGM 静音异常是原版游戏数据 bug** —— `StoryYamlData_2241`
+  开头的超长 `Mute` 会在 skip 后导致 BGM 失效，不是翻译补丁引入的问题。
 - **TextAsset name 有 4 字节对齐 padding** —— UnityPy `obj.read()` 透明处理,
   别去读 raw bytes。
 - **`env.file.save(packer="lz4")`,不要用 `"lz4hc"`**。UnityPy 自带的 lz4hc
