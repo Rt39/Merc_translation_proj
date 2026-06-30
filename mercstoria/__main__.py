@@ -30,7 +30,7 @@ SUBCOMMANDS = {
     "export-chars":    ("export_chars",    "Generate the target_chars.txt for the TMP font bake"),
     "patch-crc":       ("patch_crc",       "Apply the four CRC bypass patches to GameAssembly.dll"),
     "patch-offline":   ("patch_offline",   "Apply the offline-mode patch set to GameAssembly.dll"),
-    "patch-metadata":  ("patch_metadata",  "Patch country enum names in global-metadata.dat"),
+    "patch-metadata":  ("patch_metadata",  "Patch global-metadata.dat and built-in scene UI strings"),
     "verify-patches":  ("verify_patches",  "Sanity-check CRC + offline-mode patches"),
     "check-roundtrip": ("check_roundtrip", "Round-trip every cached story bundle through Reader/Writer"),
     "extract-ui-atlas": ("extract_ui_atlas", "Extract bitmap UI atlases (CommonUI / GalleryUI / HomeUI / FooterUI) to extracted_data/ui_atlas/"),

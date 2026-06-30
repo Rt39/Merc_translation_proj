@@ -4,7 +4,7 @@ Runs every step a translator needs BEFORE editing JSONs:
 
     1. patch-crc       — disable Unity's bundle CRC validation
     2. patch-offline   — Steam bypass + cert skip + file-read GetAsync
-    3. patch-metadata  — country/nationality enum names in global-metadata.dat (optional)
+    3. patch-metadata  — global-metadata.dat + built-in scene UI strings (optional)
     4. font-swap       — replace TMP font (atlas + bundle + hidden font)
     5. extract         — dump every story + 15 master bundles to extracted_data/
     6. bundle-cache    — copy LocalLow CDN cache into <game>/AssetBundle/    (optional)
@@ -94,7 +94,7 @@ def step_patch_offline() -> None:
 
 
 def step_patch_metadata() -> None:
-    _step("Step 3/7 — country enum names (global-metadata.dat)")
+    _step("Step 3/7 — metadata + built-in scene UI strings")
     _run_script("patch_metadata", [])
 
 
@@ -156,7 +156,7 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--skip-crc",          action="store_true", help="Skip CRC bypass.")
     ap.add_argument("--skip-offline",      action="store_true", help="Skip offline-mode patches.")
-    ap.add_argument("--skip-metadata",     action="store_true", help="Skip country enum name patch.")
+    ap.add_argument("--skip-metadata",     action="store_true", help="Skip metadata / built-in scene UI string patch.")
     ap.add_argument("--skip-font",         action="store_true", help="Skip font swap.")
     ap.add_argument("--skip-extract",      action="store_true", help="Skip JSON extraction.")
     ap.add_argument("--skip-bundle-cache", action="store_true", help="Skip LocalLow→game cache copy.")

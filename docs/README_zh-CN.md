@@ -40,7 +40,7 @@
                      │
                      ├── 1. patch-crc           （4 处 CRC 绕过）
                      ├── 2. patch-offline       （8 处：Steam 绕过 + 证书跳过 + GetAsync）
-                     ├── 3. patch-metadata      （global-metadata.dat 国家 enum 名称）
+                     ├── 3. patch-metadata      （metadata + 内置场景 UI 字符串）
                      ├── 4. font-swap           （atlas + bundle + 隐藏字体，复用 logofont.bundle）
                      ├── 5. extract             （4,008 剧情 + 15 master bundle → extracted_data/）
                      ├── 6. bundle-cache        （LocalLow → <game>/AssetBundle）
@@ -109,6 +109,8 @@ workshop/
 │   ├── STORY_BUNDLE_GUIDE.md         （+ _zh-CN）剧情 bundle 解密 + MemoryPack schema + 重打包
 │   ├── FONT_REPLACEMENT_GUIDE.md     （+ _zh-CN）
 │   ├── MASTERDATA_SCHEMA_GUIDE.md    （+ _zh-CN）全部 15 个 master bundle 的 schema
+│   ├── METADATA_PATCH_GUIDE.md       （+ _zh-CN）global-metadata.dat + 内置场景 UI 修补
+│   ├── UI_ATLAS_GUIDE.md             （+ _zh-CN）位图烘焙 UI 图集管线
 │   └── README_zh-CN.md               本文件
 │
 └── launcher/
@@ -158,6 +160,6 @@ uv run -m mercstoria              # 显示完整子命令列表
 - [x] 单击启动器 —— junction 创建步骤打进了 EXE（CMake 构建，支持 MSVC + MinGW）；启动时强制 D3D11，避免在 NVIDIA fallback 到 OpenGL ES 3 的机器上最终章片尾字幕成块跳过
 - [x] 内嵌 UI 文本 —— 最终章片尾 Timeline 字幕通过 TypeTree 替换（4 个 bundle，44 行）
 - [x] UI 标签 —— 游戏内所有菜单 / HUD / 详情面板标签从 Addressables bundle（`StreamingAssets/aa/`）提取；50 个 bundle，264 条字符串，位于 `extracted_data/ui_labels/`
-- [x] 国家名 —— 作为 IL2CPP enum 字段名字面量存储在 `global-metadata.dat`（`Country` enum ~0x1371F2，`CountryFilter` ~0x138DBC）；运行时显示 = `Enum.GetName(Country, id) + "の国"`；用 `mercstoria patch-metadata` 修补（编辑 `scripts/patch_metadata.py` 顶部的 `COUNTRY_NAMES` 字典）
+- [x] Metadata + 内置场景 UI 字符串 —— 国家名、部分 IL2CPP string literal、以及 `level5`/`level10`/`level11` 序列化标签由 `mercstoria patch-metadata` 修补；见 [`METADATA_PATCH_GUIDE_zh-CN.md`](METADATA_PATCH_GUIDE_zh-CN.md)
 - [x] 图片提取与翻译 —— 4 个把日文画进像素里的 UI 图集（CommonUI / GalleryUI / HomeUI / FooterUI）；`mercstoria extract-ui-atlas` / `repack-ui-atlas` 同时补 Addressables bundle 和 `<_Data>/sharedassets*.assets` 副本
 - [ ] 4,000+ 剧情的翻译记忆 + LLM 管线

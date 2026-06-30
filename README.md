@@ -42,7 +42,7 @@ The toolkit collapses into two commands:
                      │
                      ├── 1. patch-crc           (4 sites)
                      ├── 2. patch-offline       (8 sites — Steam bypass + cert + GetAsync)
-                     ├── 3. patch-metadata      (country enum names in global-metadata.dat)
+                     ├── 3. patch-metadata      (metadata + built-in scene UI strings)
                      ├── 4. font-swap           (atlas + bundle + hidden font, uses logofont.bundle)
                      ├── 5. extract             (4,008 stories + 15 master bundles → extracted_data/)
                      ├── 6. bundle-cache        (LocalLow → <game>/AssetBundle)
@@ -122,6 +122,7 @@ workshop/
 │   ├── STORY_BUNDLE_GUIDE.md         (+ _zh-CN) story bundle decrypt + MemoryPack schema + repack
 │   ├── FONT_REPLACEMENT_GUIDE.md     (+ _zh-CN)
 │   ├── MASTERDATA_SCHEMA_GUIDE.md    (+ _zh-CN) all 15 master bundle schemas
+│   ├── METADATA_PATCH_GUIDE.md       (+ _zh-CN) global-metadata.dat + built-in scene UI patches
 │   ├── UI_ATLAS_GUIDE.md             (+ _zh-CN) bitmap-baked UI text atlas pipeline
 │   └── README_zh-CN.md               this file in 简体中文
 │
@@ -172,6 +173,6 @@ The only non-Python prerequisite for the patches themselves is **Il2CppDumper**,
 - [x] Single-click launcher — bundles junction setup into the EXE (CMake-built, MSVC + MinGW); forces D3D11 so the final-chapter cinematic plays at the intended cadence on NVIDIA GPUs that fall back to OpenGL ES 3
 - [x] Inline UI text — final-chapter Timeline cinematic dialogue swapped in via TypeTree (4 bundles, 44 strings)
 - [x] UI labels — all in-game menu/HUD/detail-panel labels extracted from Addressables bundles (`StreamingAssets/aa/`); 50 bundles, 264 strings via `extracted_data/ui_labels/`
-- [x] Country / nationality names — stored as IL2CPP enum field name literals in `global-metadata.dat` (`Country` enum @ ~0x1371F2, `CountryFilter` @ ~0x138DBC); runtime label = `Enum.GetName(Country, id) + "の国"`; patch with `mercstoria patch-metadata` (edit `COUNTRY_NAMES` dict at top of `scripts/patch_metadata.py`)
+- [x] Metadata + built-in scene UI strings — country/nationality enum names, select IL2CPP string literals, and `level5`/`level10`/`level11` serialized labels are patched by `mercstoria patch-metadata`; see [`docs/METADATA_PATCH_GUIDE.md`](docs/METADATA_PATCH_GUIDE.md)
 - [x] Image extraction + translation — 4 UI atlases (CommonUI / GalleryUI / HomeUI / FooterUI) where Japanese text is baked into pixels; `mercstoria extract-ui-atlas` / `repack-ui-atlas` patch both the Addressables bundle and the `<_Data>/sharedassets*.assets` duplicate
 - [ ] Translation memory + LLM pipeline for all 4,000+ stories

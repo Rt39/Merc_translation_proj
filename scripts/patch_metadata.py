@@ -1,22 +1,19 @@
-"""Patch country / nationality enum names in global-metadata.dat.
+"""Patch metadata enum names and built-in scene UI strings.
 
-IL2CPP stores enum field names as null-terminated UTF-8 strings inside
-global-metadata.dat. The game renders country labels at runtime by calling
-Enum.GetName(Country, id) and appending "の国" (defined as CountryEnum.CountrySuffix).
-Patching these strings in-place makes every reference update at once — unit
-detail panel, filter UI, sort labels — without touching any bundle.
+IL2CPP stores country enum field names as null-terminated UTF-8 strings inside
+global-metadata.dat. Country / CountryFilter are rendered as
+Enum.GetName(Country, id) + COUNTRY_SUFFIX ("の国"). Class names appear BEFORE
+their field names in the string pool, so _read_block scans forward from the
+anchor.
 
-Constraint: each replacement must encode to <= the original byte count.
-If shorter, remaining bytes are zeroed (still null-terminated, safe).
-In practice this is rarely a problem: katakana names (3 bytes/char) are
-almost always longer than their CJK translations.
+A few home/story/gallery UI labels are serialized directly in built-in Unity
+scene files (level5 / level10 / level11). They are patched in place without
+changing serialized string byte-lengths; shorter replacements are padded with
+spaces so later fields stay aligned.
 
-Edit COUNTRY_NAMES below: keys are the original Japanese names, values are
-your translations.  Leave a value empty to keep the original unchanged.
-Run with no args — it dry-runs first and prints a diff, then applies.
-Idempotent: re-running after patching is a no-op (shows current state).
-
-Backup: written to global-metadata.dat.bak on first run (never overwritten).
+Edit COUNTRY_NAMES / COUNTRY_SUFFIX / SCENE_TEXT_PATCHES below. Run with no
+args — dry-runs first, then applies. Idempotent. Backups are written next to
+the original files on first run.
 """
 from __future__ import annotations
 import shutil, struct, sys
@@ -66,6 +63,31 @@ COUNTRY_NAMES: dict[str, str] = {
 # Two occurrences in the stringliteral region (different call sites). Must be <= 6 bytes.
 COUNTRY_SUFFIX: str = "之国"   # e.g. "之国" (6B) to replace "の国"
 
+SCENE_TEXT_PATCHES: list[tuple[str, str, str]] = [
+    ("level10", "メイン\nストーリー", "主线\n故事"),
+    ("level10", "イベント\nストーリー", "活动\n故事"),
+    ("level10", "ユニット\nストーリー", "同伴\n故事"),
+    ("level10", "ローディング\nマンガ", "加载\n漫画"),
+    ("level10", "メモリアル\nストーリー", "纪念\n故事"),
+    ("level10", "ストーリー", "故事"),
+    ("level5",  "ギャラリー", "画廊"),
+    ("level11", "設定", "设置"),
+    ("level10", "プロローグ", "序章"),
+    ("level10", "第一部オリジン", "第一部原版"),
+]
+
+STRING_LITERAL_PATCHES: dict[str, str] = {
+    "ユニット一覧": "角色列表",
+    "ユニット総数": "角色总数",
+    "すべてのイベント": "全部活动",
+    "絞り込み": "筛选",
+}
+
+STRING_DATA_PATCHES: dict[str, str] = {
+    "幻憶": "幻忆",
+    "コラボ": "联动",
+    "第一部オリジン": "第一部原版",
+}
 _ANCHORS = [b"Country\x00", b"CountryFilter\x00"]
 _SUFFIX_ORIG = "の国".encode("utf-8")
 
@@ -76,9 +98,6 @@ _FLD_SEC = 11  # FieldDefinition table (16B entries: nameIdx typeIdx attrIdx tok
 
 
 def _expand_string(buf: bytearray, abs_off: int, new_bytes: bytes) -> None:
-    """Append new_bytes to end of StringData, redirect the FieldDef nameIndex
-    that referenced abs_off to the new location; shift all post-StringData
-    section offsets in the header to account for the inserted bytes."""
     str_off = struct.unpack_from('<i', buf, 8 + _STR_SEC * 8)[0]
     str_cnt = struct.unpack_from('<i', buf, 8 + _STR_SEC * 8 + 4)[0]
     fld_off = struct.unpack_from('<i', buf, 8 + _FLD_SEC * 8)[0]
@@ -89,14 +108,13 @@ def _expand_string(buf: bytearray, abs_off: int, new_bytes: bytes) -> None:
     payload = new_bytes + b'\x00'
     delta = len(payload)
 
-    buf[str_off + str_cnt:str_off + str_cnt] = payload  # insert at StringData end
+    buf[str_off + str_cnt:str_off + str_cnt] = payload
     struct.pack_into('<i', buf, 8 + _STR_SEC * 8 + 4, str_cnt + delta)
     for i in range(_NUM_SEC):
         off = struct.unpack_from('<i', buf, 8 + i * 8)[0]
         if off > str_off:
             struct.pack_into('<i', buf, 8 + i * 8, off + delta)
 
-    # Update FieldDef nameIndex (v31: 12B entries = nameIdx+typeIdx+token, step 12)
     actual_fld = fld_off + delta
     old_pk, new_pk = struct.pack('<i', old_rel), struct.pack('<i', new_rel)
     pos, found = actual_fld, 0
@@ -118,43 +136,184 @@ def _read_block(data: bytes, anchor: bytes):
     while pos < len(data):
         end = data.index(0, pos)
         raw = bytes(data[pos:end])
-        if not raw or raw[0] < 0x80:   # empty or ASCII → left the JP block
+        if not raw or raw[0] < 0x80:
             break
         try:
             yield pos, raw.decode("utf-8"), end - pos
         except UnicodeDecodeError:
             break
         pos = end + 1
+        while pos < len(data) and data[pos] == 0:
+            pos += 1
+
+
+def _metadata_raw_string_plan(data: bytes, table: dict[str, str], zero_pad: bool):
+    for orig, repl in table.items():
+        if not repl or repl == orig:
+            continue
+        orig_b = orig.encode("utf-8")
+        repl_b = repl.encode("utf-8")
+        matches = []
+        start = 0
+        while True:
+            off = data.find(orig_b, start)
+            if off < 0:
+                break
+            if off == 0 or data[off - 1] == 0:
+                end = off + len(orig_b)
+                if end >= len(data) or data[end] == 0:
+                    matches.append(off)
+            start = off + 1
+        if not matches:
+            if repl_b in data:
+                yield None, orig, repl, len(orig_b), len(repl_b), "already patched", zero_pad
+                continue
+            raise SystemExit(f"metadata: string {orig!r} not found — game update?")
+        for off in matches:
+            if len(repl_b) > len(orig_b):
+                yield off, orig, repl, len(orig_b), len(repl_b), "OVERFLOW", zero_pad
+            else:
+                yield off, orig, repl, len(orig_b), len(repl_b), "OK", zero_pad
+
+
+def _metadata_string_literal_plan(data: bytes, table: dict[str, str]):
+    strlit_off, strlit_cnt = struct.unpack_from('<ii', data, 8)
+    litdata_off, litdata_cnt = struct.unpack_from('<ii', data, 16)
+    litdata_end = litdata_off + litdata_cnt
+    region = data[litdata_off:litdata_end]
+    for orig, repl in table.items():
+        if not repl or repl == orig:
+            continue
+        orig_b = orig.encode("utf-8")
+        repl_b = repl.encode("utf-8")
+        matches = []
+        start = 0
+        while True:
+            rel = region.find(orig_b, start)
+            if rel < 0:
+                break
+            entries = []
+            for i in range(strlit_cnt // 8):
+                length, data_idx = struct.unpack_from('<Ii', data, strlit_off + i * 8)
+                if data_idx == rel and length == len(orig_b):
+                    entries.append(strlit_off + i * 8)
+            matches.append((litdata_off + rel, entries))
+            start = rel + 1
+        if not matches:
+            if repl_b in region:
+                yield None, orig, repl, len(orig_b), len(repl_b), "already patched", False, None
+                continue
+            raise SystemExit(f"metadata: string literal {orig!r} not found — game update?")
+        exact = [(off, entries) for off, entries in matches if entries]
+        if len(exact) != 1 or len(exact[0][1]) != 1:
+            raise SystemExit(f"metadata: string literal {orig!r} did not map to exactly one StringLiteral entry")
+        off, entries = exact[0]
+        if len(repl_b) > len(orig_b):
+            yield off, orig, repl, len(orig_b), len(repl_b), "OVERFLOW", False, entries[0]
+        else:
+            yield off, orig, repl, len(orig_b), len(repl_b), "OK", False, entries[0]
+
+
+def _apply_metadata_byte_patches(buf: bytearray, plans) -> None:
+    for plan in plans:
+        off, orig, repl, orig_len, repl_len, status, zero_pad, *rest = plan
+        lit_entry_off = rest[0] if rest else None
+        if status == "already patched":
+            continue
+        if status != "OK":
+            raise SystemExit(f"metadata: {orig!r} → {repl!r} {status}")
+        repl_b = repl.encode("utf-8")
+        pad = b"\x00" if zero_pad else b" "
+        buf[off:off + orig_len] = repl_b + pad * (orig_len - len(repl_b))
+        if lit_entry_off is not None:
+            struct.pack_into('<I', buf, lit_entry_off, len(repl_b))
+
+
+def _scene_patch_plan(data: bytes, scene_name: str):
+    for target_scene, orig, repl in SCENE_TEXT_PATCHES:
+        if target_scene != scene_name or not repl or repl == orig:
+            continue
+        orig_b = orig.encode("utf-8")
+        repl_b = repl.encode("utf-8")
+        matches = []
+        start = 0
+        while True:
+            off = data.find(orig_b, start)
+            if off < 0:
+                break
+            length_off = off - 4
+            if length_off >= 0 and struct.unpack_from('<i', data, length_off)[0] == len(orig_b):
+                matches.append(off)
+            start = off + 1
+        if not matches:
+            if repl_b in data:
+                yield None, orig, repl, len(orig_b), len(repl_b), "already patched"
+                continue
+            raise SystemExit(f"{scene_name}: string {orig!r} not found — game update?")
+        if len(matches) > 1:
+            raise SystemExit(f"{scene_name}: string {orig!r} matched multiple serialized strings: {[hex(x) for x in matches]}")
+        off = matches[0]
+        if len(repl_b) > len(orig_b):
+            yield off, orig, repl, len(orig_b), len(repl_b), "OVERFLOW"
+            continue
+        length_off = off - 4
+        if length_off < 0 or struct.unpack_from('<i', data, length_off)[0] != len(orig_b):
+            raise SystemExit(f"{scene_name}: length prefix mismatch for {orig!r} at 0x{off:x}")
+        yield off, orig, repl, len(orig_b), len(repl_b), "OK"
+
+
+def _apply_scene_patches(scene_path: Path) -> bool:
+    bak = scene_path.with_name(scene_path.name + ".bak")
+    if not bak.exists():
+        shutil.copy2(scene_path, bak)
+        print(f"\nBackup: {bak}")
+
+    buf = bytearray(bak.read_bytes())
+    changed = False
+    for off, orig, repl, orig_len, repl_len, status in _scene_patch_plan(bytes(buf), scene_path.name):
+        if status == "already patched":
+            changed = True
+            continue
+        if status != "OK":
+            raise SystemExit(f"{scene_path.name}: {orig!r} → {repl!r} {status}")
+        repl_b = repl.encode("utf-8")
+        buf[off:off + orig_len] = repl_b + b" " * (orig_len - len(repl_b))
+        changed = True
+    if changed:
+        scene_path.write_bytes(bytes(buf))
+    return changed
 
 
 def main() -> int:
     meta = cfg.app_data_dir() / "il2cpp_data" / "Metadata" / "global-metadata.dat"
-    bak  = meta.with_name("global-metadata.dat.bak")
+    bak = meta.with_name("global-metadata.dat.bak")
     if not meta.exists():
         print(f"ERROR: {meta} not found.")
         return 1
 
     data = bytearray(meta.read_bytes())
     translations = {k: v for k, v in COUNTRY_NAMES.items() if v and v != k}
-
     suffix_repl = COUNTRY_SUFFIX.encode("utf-8") if COUNTRY_SUFFIX else None
+    scene_names = sorted({scene for scene, orig, repl in SCENE_TEXT_PATCHES if repl and repl != orig})
+    literal_patch_enabled = any(v and v != k for k, v in STRING_LITERAL_PATCHES.items())
+    string_data_patch_enabled = any(v and v != k for k, v in STRING_DATA_PATCHES.items())
 
-    if not translations and not suffix_repl:
-        print("COUNTRY_NAMES and COUNTRY_SUFFIX are empty — showing current values:\n")
+    if not translations and not suffix_repl and not scene_names and not literal_patch_enabled and not string_data_patch_enabled:
+        print("All translation tables are empty — showing current values:\n")
         for anchor in _ANCHORS:
             print(f"  [{anchor.decode().rstrip(chr(0))}]")
             for off, name, slot in _read_block(bytes(data), anchor):
                 print(f"    0x{off:06X}  {slot:2d}B  {name!r}")
         suffix_offs = [i for i in range(len(data))
-                       if data[i:i+len(_SUFFIX_ORIG)] == _SUFFIX_ORIG]
+                       if data[i:i + len(_SUFFIX_ORIG)] == _SUFFIX_ORIG]
         print(f"\n  [suffix 'の国']  {len(suffix_offs)} occurrences: "
               f"{[hex(x) for x in suffix_offs]}")
-        print("\nEdit COUNTRY_NAMES / COUNTRY_SUFFIX at the top of this script, then re-run.")
+        print("\nEdit COUNTRY_NAMES / COUNTRY_SUFFIX at the top, then re-run.")
         return 0
 
-    # Dry run
     print("=== Dry run ===")
     all_ok = True
+
     for anchor in _ANCHORS:
         label = anchor.decode().rstrip("\x00")
         changes = [(off, name, slot, translations[name])
@@ -169,6 +328,33 @@ def main() -> int:
                 print(f"    0x{off:06X}  {name!r} → {repl!r}  OK ({len(rb)}B <= {slot}B)")
             else:
                 print(f"    0x{off:06X}  {name!r} → {repl!r}  EXPAND ({len(rb)}B > {slot}B, append to StringData)")
+
+    for scene_name in scene_names:
+        scene_path = cfg.app_data_dir() / scene_name
+        if not scene_path.exists():
+            raise SystemExit(f"ERROR: {scene_path} not found.")
+        scene_data = scene_path.read_bytes()
+        scene_changes = list(_scene_patch_plan(scene_data, scene_name))
+        if not scene_changes:
+            continue
+        print(f"\n  [{scene_name}]")
+        for off, orig, repl, orig_len, repl_len, status in scene_changes:
+            loc = "already" if off is None else f"0x{off:06X}"
+            print(f"    {loc}  {orig!r} → {repl!r}  {status} ({repl_len}B <= {orig_len}B)")
+            if status == "OVERFLOW":
+                all_ok = False
+
+    metadata_byte_plans = []
+    metadata_byte_plans.extend(_metadata_string_literal_plan(bytes(data), STRING_LITERAL_PATCHES))
+    metadata_byte_plans.extend(_metadata_raw_string_plan(bytes(data), STRING_DATA_PATCHES, zero_pad=True))
+    if metadata_byte_plans:
+        print(f"\n  [metadata strings]")
+        for plan in metadata_byte_plans:
+            off, orig, repl, orig_len, repl_len, status, _zero_pad, *_rest = plan
+            loc = "already" if off is None else f"0x{off:06X}"
+            print(f"    {loc}  {orig!r} → {repl!r}  {status} ({repl_len}B <= {orig_len}B)")
+            if status == "OVERFLOW":
+                all_ok = False
 
     if suffix_repl is not None:
         if len(suffix_repl) > len(_SUFFIX_ORIG):
@@ -185,21 +371,17 @@ def main() -> int:
         print("\nERROR: shorten the translations marked OVERFLOW and re-run.")
         return 1
 
-    # Apply
     if not bak.exists():
         shutil.copy2(meta, bak)
         print(f"\nBackup: {bak}")
 
     buf = bytearray(bak.read_bytes())
-
-    # Collect all (abs_off, slot, name, repl) across both anchors
     patches = []
     for anchor in _ANCHORS:
         for off, name, slot in _read_block(bytes(buf), anchor):
             if name in translations:
                 patches.append((off, slot, name, translations[name]))
 
-    # Expansions first (they insert bytes and shift the file), then in-place
     for off, slot, name, repl in patches:
         rb = repl.encode("utf-8")
         if len(rb) > slot:
@@ -219,8 +401,19 @@ def main() -> int:
             buf[i:i + len(_SUFFIX_ORIG)] = padded
             pos = i + len(_SUFFIX_ORIG)
 
+    metadata_apply_plans = []
+    metadata_apply_plans.extend(_metadata_string_literal_plan(bytes(buf), STRING_LITERAL_PATCHES))
+    metadata_apply_plans.extend(_metadata_raw_string_plan(bytes(buf), STRING_DATA_PATCHES, zero_pad=True))
+    _apply_metadata_byte_patches(buf, metadata_apply_plans)
+
     meta.write_bytes(bytes(buf))
     print(f"Patched: {meta}")
+
+    for scene_name in scene_names:
+        scene_path = cfg.app_data_dir() / scene_name
+        if _apply_scene_patches(scene_path):
+            print(f"Patched: {scene_path}")
+
     return 0
 
 
