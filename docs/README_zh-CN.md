@@ -5,7 +5,7 @@
 五项相互独立的技术成果，合在一起即可完成完整翻译：
 
 1. **CRC 绕过** —— 4 处 `xor edx, edx` 修补在 `GameAssembly.dll` 中，修改后的 bundle 不会再被静默重下。见 [`CRC_PATCH_GUIDE_zh-CN.md`](CRC_PATCH_GUIDE_zh-CN.md)。
-2. **文本解密 / 提取 / 重打包** —— 大约 4,000 个剧情 bundle 的完整管线（AES-256-CBC + MemoryPack）。见 [`STORY_BUNDLE_GUIDE_zh-CN.md`](STORY_BUNDLE_GUIDE_zh-CN.md)。
+2. **文本解密 / 提取 / 重打包** —— 大约 4,000 个剧情 bundle 的完整管线（AES-256-CBC + MemoryPack），以及把 UI 文字直接画进像素的位图烘焙图集。见 [`STORY_BUNDLE_GUIDE_zh-CN.md`](STORY_BUNDLE_GUIDE_zh-CN.md) 与 [`UI_ATLAS_GUIDE_zh-CN.md`](UI_ATLAS_GUIDE_zh-CN.md)。
 3. **字体替换** —— 同时修补字体实际所在的三个物理位置，TMP 字体可任意替换。见 [`FONT_REPLACEMENT_GUIDE_zh-CN.md`](FONT_REPLACEMENT_GUIDE_zh-CN.md)。
 4. **离线模式** —— 8 处修补（Steam 绕过 + Cysharp 证书跳过 + 纯文件读取 GetAsync），让安装包无需联网、无需 Steam。见 [`OFFLINE_MODE_GUIDE_zh-CN.md`](OFFLINE_MODE_GUIDE_zh-CN.md)。
 5. **自包含启动器** —— 替换 `メルストM.exe` 的单击启动器，把 NTFS junction 创建步骤打进了 EXE 自身。见 [`../launcher/README_zh-CN.md`](../launcher/README_zh-CN.md)。
@@ -100,6 +100,7 @@ workshop/
 │   ├── deploy.py               把重打包的 bundle 推到 <game>/AssetBundle（原文件镜像到 AssetBundle_old/）
 │   ├── bundle_cache.py         把 %LocalLow%/.../AssetBundle 拷到 <game>/AssetBundle
 │   ├── font_swap.py            TMP 字体替换（atlas + bundle + 隐藏字体）
+│   ├── extract_ui_atlas.py     位图烘焙的 UI 图集 extract/repack（CommonUI/GalleryUI/HomeUI/FooterUI；同时补 sharedassets 副本）
 │   └── export_chars.py         为 TMP 字体烘焙生成 target_chars.txt
 │
 ├── docs/
@@ -158,5 +159,5 @@ uv run -m mercstoria              # 显示完整子命令列表
 - [x] 内嵌 UI 文本 —— 最终章片尾 Timeline 字幕通过 TypeTree 替换（4 个 bundle，44 行）
 - [x] UI 标签 —— 游戏内所有菜单 / HUD / 详情面板标签从 Addressables bundle（`StreamingAssets/aa/`）提取；50 个 bundle，264 条字符串，位于 `extracted_data/ui_labels/`
 - [x] 国家名 —— 作为 IL2CPP enum 字段名字面量存储在 `global-metadata.dat`（`Country` enum ~0x1371F2，`CountryFilter` ~0x138DBC）；运行时显示 = `Enum.GetName(Country, id) + "の国"`；用 `mercstoria patch-metadata` 修补（编辑 `scripts/patch_metadata.py` 顶部的 `COUNTRY_NAMES` 字典）
-- [ ] 图片提取与翻译 —— 找出游戏中含日文的美术资源并替换
+- [x] 图片提取与翻译 —— 4 个把日文画进像素里的 UI 图集（CommonUI / GalleryUI / HomeUI / FooterUI）；`mercstoria extract-ui-atlas` / `repack-ui-atlas` 同时补 Addressables bundle 和 `<_Data>/sharedassets*.assets` 副本
 - [ ] 4,000+ 剧情的翻译记忆 + LLM 管线

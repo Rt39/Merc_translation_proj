@@ -33,6 +33,8 @@ SUBCOMMANDS = {
     "patch-metadata":  ("patch_metadata",  "Patch country enum names in global-metadata.dat"),
     "verify-patches":  ("verify_patches",  "Sanity-check CRC + offline-mode patches"),
     "check-roundtrip": ("check_roundtrip", "Round-trip every cached story bundle through Reader/Writer"),
+    "extract-ui-atlas": ("extract_ui_atlas", "Extract bitmap UI atlases (CommonUI / GalleryUI / HomeUI / FooterUI) to extracted_data/ui_atlas/"),
+    "repack-ui-atlas":  ("extract_ui_atlas", "Repack edited UI atlas PNGs into repacked_bundles/ui_atlas/"),
 }
 
 
@@ -59,6 +61,11 @@ def main(argv: list[str] | None = None) -> int:
         # expects the verb as the first positional.
         if subcmd in ("extract", "repack", "update"):
             forward = [subcmd] + forward
+        # The ui-atlas subcommands likewise share one script with verb-first.
+        elif subcmd == "extract-ui-atlas":
+            forward = ["extract"] + forward
+        elif subcmd == "repack-ui-atlas":
+            forward = ["repack"] + forward
     else:
         print(f"unknown subcommand: {subcmd!r}\n", file=sys.stderr)
         _print_usage()

@@ -43,6 +43,11 @@ REPACKED_STORY     = _HERE / "repacked_bundles" / "story"
 REPACKED_MISC      = _HERE / "repacked_bundles" / "misc"
 REPACKED_INLINE_UI = _HERE / "repacked_bundles" / "inline_ui"
 REPACKED_UI_LABELS = _HERE / "repacked_bundles" / "ui_labels"
+REPACKED_UI_ATLAS  = _HERE / "repacked_bundles" / "ui_atlas"
+# Patched <_Data>/sharedassets*.assets (CommonUI/GalleryUI/HomeUI duplicates,
+# inlined by `repack-ui-atlas`). The matching .resS sidecars are NOT touched
+# — UnityPy inlines the modified texture into the .assets itself.
+REPACKED_UI_ATLAS_SHAREDASSETS = _HERE / "repacked_bundles" / "ui_atlas_sharedassets"
 
 
 def _resolve_paths() -> tuple[Path, Path]:
@@ -90,6 +95,76 @@ def deploy(src_dir: Path, dst_dir: Path, backup_dir: Path, label: str) -> int:
     return count
 
 
+def _deploy_ui_atlas_sharedassets() -> int:
+    """Copy patched <_Data>/sharedassets*.assets files into the live install.
+
+    Each file is backed up to `<name>.bak` next to the original on first
+    deploy; subsequent runs never overwrite the .bak (same first-seen invariant
+    as `deploy()`). The .resS sidecars are intentionally left alone — the
+    repack step inlines the modified Texture2D into the .assets, and other
+    textures in the same file still reference the unchanged .resS.
+    """
+    if not REPACKED_UI_ATLAS_SHAREDASSETS.is_dir():
+        return 0
+    data_dir = cfg.app_data_dir()
+    count = 0
+    for fname in sorted(os.listdir(REPACKED_UI_ATLAS_SHAREDASSETS)):
+        if not fname.endswith(".assets"):
+            continue
+        src = REPACKED_UI_ATLAS_SHAREDASSETS / fname
+        dst = data_dir / fname
+        bak = data_dir / f"{fname}.bak"
+        if not dst.exists():
+            print(f"  (ui-atlas-sa) {fname}: target does not exist at {dst}, skipping")
+            continue
+        if not bak.exists():
+            shutil.copy2(dst, bak)
+        shutil.copy2(src, dst)
+        print(f"  (ui-atlas-sa) {fname} -> {dst}")
+        count += 1
+    if count:
+        print(f"  (ui-atlas-sa) {count} sharedassets file(s) patched in {data_dir}")
+    return count
+
+
+def _deploy_ui_atlas(cache_ui: Path, sa_live: Path,
+                     backup_ui: Path, sa_backup: Path) -> int:
+    """Route each repacked ui_atlas bundle to BundleAssets or StreamingAssets
+    based on its TARGETS entry's source_dir. Same per-file backup invariant
+    as `deploy()`."""
+    if not REPACKED_UI_ATLAS.is_dir():
+        print(f"  (ui-atlas) {REPACKED_UI_ATLAS} — empty, nothing to deploy")
+        return 0
+    from scripts.extract_ui_atlas import TARGETS  # local import: optional dep
+    by_bundle = {t["bundle"]: t for t in TARGETS}
+
+    count = 0
+    for fname in sorted(os.listdir(REPACKED_UI_ATLAS)):
+        spec = by_bundle.get(fname)
+        if spec is None:
+            print(f"  (ui-atlas) {fname}: no TARGETS entry, skipping")
+            continue
+        if spec["source_dir"] == "sa":
+            dst_dir, bak_dir = sa_live, sa_backup
+        elif spec["source_dir"] == "ba":
+            dst_dir, bak_dir = cache_ui, backup_ui
+        else:
+            print(f"  (ui-atlas) {fname}: unknown source_dir {spec['source_dir']!r}")
+            continue
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        bak_dir.mkdir(parents=True, exist_ok=True)
+        src = REPACKED_UI_ATLAS / fname
+        dst = dst_dir / fname
+        bak = bak_dir / fname
+        if dst.exists() and not bak.exists():
+            shutil.copy2(dst, bak)
+        shutil.copy2(src, dst)
+        print(f"  (ui-atlas) {spec['name']:10s} -> {dst}")
+        count += 1
+    print(f"  (ui-atlas) {count} bundles deployed")
+    return count
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.parse_args()
@@ -121,9 +196,14 @@ def main() -> int:
     sa_backup = cfg.app_data_dir() / "StreamingAssets" / "aa" / "StandaloneWindows64_old"
     n_labels  = deploy(REPACKED_UI_LABELS, sa_live, sa_backup, "ui-labels")
 
-    print(f"\nTotal: {n_story + n_misc + n_ui + n_labels} bundles. Originals mirrored under")
-    print(f"  {backup_root.parent}  (story/misc/inline-ui)")
-    print(f"  {sa_backup.parent}  (ui-labels → StreamingAssets/aa/)")
+    n_atlas      = _deploy_ui_atlas(cache_ui, sa_live, backup_ui, sa_backup)
+    n_atlas_sa   = _deploy_ui_atlas_sharedassets()
+
+    print(f"\nTotal: {n_story + n_misc + n_ui + n_labels + n_atlas + n_atlas_sa} files. Originals mirrored under")
+    print(f"  {backup_root.parent}  (story/misc/inline-ui/ui-atlas-ba)")
+    print(f"  {sa_backup.parent}  (ui-labels / ui-atlas-sa → StreamingAssets/aa/)")
+    if n_atlas_sa:
+        print(f"  {cfg.app_data_dir()}\\sharedassets*.assets.bak  (ui-atlas-sa duplicates)")
     return 0
 
 
