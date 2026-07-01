@@ -7,7 +7,10 @@ Self-contained Windows launcher that replaces what used to be a manual
 junction from
 `%LocalLow%/jp_co_happyelements/メルストM/AssetBundle` to the bundled
 `<install>/AssetBundle/`, then chains into the original `メルストM.exe`.
-Idempotent — second run sees the junction and just launches.
+Idempotent — second run sees the junction and just launches. Self-healing —
+if the game folder gets renamed or moved, the launcher detects the stale
+target on the next run and rewrites the junction to the new path (otherwise
+Unity would load an invalid `AssetBundle/` and boot to a black screen).
 
 The launcher is a **drop-in companion** to the original game exe, not a
 replacement: original `メルストM.exe` and `メルストM_Data/` stay untouched
@@ -97,6 +100,11 @@ left in place until you reclaim the disk with `mercstoria release
   redistributable.
 * `ctest` exercises `create_junction` against `%TEMP%` and verifies the link
   resolves before tearing it down.
+* Stale-junction detection uses `FSCTL_GET_REPARSE_POINT` (via
+  `read_junction_target` in `junction.c`) and a case-insensitive
+  `_wcsicmp` against the current install's `AssetBundle/` path. On mismatch
+  the link is removed and rebuilt in place — the target directory is never
+  touched.
 * Spawns `メルストM.exe -force-d3d11`. Unity 6000.x falls back to OpenGL ES 3
   on some NVIDIA driver configurations, which makes the final-chapter
   Timeline cinematic skip subtitles in chunks (frame pacing mismatch with

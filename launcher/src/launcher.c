@@ -114,7 +114,21 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE hp, LPWSTR cmdLine, int show) {
 
     // 3. Decide what to do at the junction location.
     if (dir_exists(persist_ab)) {
-        if (!is_reparse(persist_ab)) {
+        if (is_reparse(persist_ab)) {
+            // Junction already installed. Trust it only if it still points at
+            // *this* install's AssetBundle. If the game folder was renamed or
+            // moved, the stored target is stale — Unity would load nothing
+            // (black screen). Replace the link in place.
+            wchar_t current_target[BUF_CHARS];
+            BOOL matches = read_junction_target(persist_ab, current_target, BUF_CHARS)
+                        && _wcsicmp(current_target, game_ab) == 0;
+            if (!matches) {
+                if (!RemoveDirectoryW(persist_ab))
+                    die(L"could not remove stale AssetBundle junction", GetLastError());
+                if (!create_junction(persist_ab, game_ab))
+                    die(L"create_junction failed replacing stale junction", GetLastError());
+            }
+        } else {
             // Move the real directory aside before installing our junction.
             wchar_t bak[BUF_CHARS];
             int i = 0;
@@ -132,7 +146,6 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE hp, LPWSTR cmdLine, int show) {
             if (!create_junction(persist_ab, game_ab))
                 die(L"create_junction failed after move-aside", GetLastError());
         }
-        // else: already a reparse point — trust it. (Re-running is a no-op.)
     } else {
         if (!ensure_dir(persist_dir))
             die(L"could not create the persistent-data parent directory", GetLastError());

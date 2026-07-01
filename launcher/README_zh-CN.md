@@ -9,6 +9,10 @@
 `メルストM_Data/` 保持不动，Steam 的"验证文件完整性"仍然能在原文件上通过。
 用户双击 `メルストM_chs.exe` 即可启动汉化版。
 
+自愈：如果游戏文件夹被改名或整体移动，启动器下次运行会检测到 junction 的
+目标已经失效并把它改写到新路径（否则 Unity 会从无效的 `AssetBundle/` 加载，
+直接进入黑屏）。
+
 junction 的来龙去脉见
 [`../docs/OFFLINE_MODE_GUIDE_zh-CN.md`](../docs/OFFLINE_MODE_GUIDE_zh-CN.md)。
 
@@ -92,6 +96,10 @@ Remove-Item -LiteralPath "$dest\メルストM_chs.exe"
   何 redistributable。
 * `ctest` 在 `%TEMP%` 上跑一遍 `create_junction`，验证 link 能正确解析后
   再清理掉。
+* Stale junction 的检测走 `FSCTL_GET_REPARSE_POINT`（封装在 `junction.c`
+  的 `read_junction_target`），拿到现有目标后用 `_wcsicmp` 与当前安装的
+  `AssetBundle/` 路径做大小写不敏感比对。不匹配就原地删链接重建，目标目录
+  本身完全不动。
 * 启动游戏时附加 `-force-d3d11`。Unity 6000.x 在某些 NVIDIA 驱动配置下会
   fallback 到 OpenGL ES 3，导致最终章片尾 Timeline 字幕成块跳过（帧率与
   `UnscaledGameTime` 推进对不上）。强制 D3D11 能让 cinematic 按设计节奏

@@ -94,3 +94,50 @@ BOOL create_junction(const wchar_t* link, const wchar_t* target) {
     }
     return TRUE;
 }
+
+BOOL read_junction_target(const wchar_t* link, wchar_t* out, size_t out_chars) {
+    HANDLE h = CreateFileW(link, 0,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           NULL, OPEN_EXISTING,
+                           FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+                           NULL);
+    if (h == INVALID_HANDLE_VALUE) return FALSE;
+
+    BYTE raw[MAXIMUM_REPARSE_DATA_BUFFER_SIZE];
+    DWORD returned = 0;
+    BOOL ok = DeviceIoControl(h, FSCTL_GET_REPARSE_POINT, NULL, 0,
+                              raw, sizeof(raw), &returned, NULL);
+    DWORD err = GetLastError();
+    CloseHandle(h);
+    if (!ok) { SetLastError(err); return FALSE; }
+
+    REPARSE_MOUNT_POINT* rb = (REPARSE_MOUNT_POINT*)raw;
+    if (rb->ReparseTag != IO_REPARSE_TAG_MOUNT_POINT) {
+        SetLastError(ERROR_NOT_A_REPARSE_POINT);
+        return FALSE;
+    }
+
+    // Prefer PrintName (already Win32 form); fall back to SubstituteName
+    // and strip the leading \??\ NT-namespace prefix.
+    WORD off, len;
+    if (rb->PrintNameLength > 0) {
+        off = rb->PrintNameOffset;
+        len = rb->PrintNameLength;
+    } else {
+        off = rb->SubstituteNameOffset;
+        len = rb->SubstituteNameLength;
+    }
+    const WCHAR* src = (const WCHAR*)((const BYTE*)rb->PathBuffer + off);
+    size_t chars = len / sizeof(WCHAR);
+    if (chars >= 4 && src[0] == L'\\' && src[1] == L'?' && src[2] == L'?' && src[3] == L'\\') {
+        src += 4;
+        chars -= 4;
+    }
+    if (chars + 1 > out_chars) {
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+    memcpy(out, src, chars * sizeof(WCHAR));
+    out[chars] = 0;
+    return TRUE;
+}
