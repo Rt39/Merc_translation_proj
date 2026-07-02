@@ -286,8 +286,21 @@ def find_all_strings(data: bytes):
 
 def apply_misc_json(data: bytes, doc: dict) -> bytes:
     """Replace each MemoryPack string whose `strings[i].value` in the JSON
-    differs from the original. Matched by byte offset."""
-    by_offset = {s["offset"]: s["value"] for s in doc.get("strings", [])}
+    differs from the original. Matched by byte offset.
+
+    A missing `strings` array is a broken JSON — silently ignoring it would
+    quietly repack the bundle with zero edits, so we hard-error instead.
+    Missing `offset`/`value` on any entry likewise error out with the entry
+    index so the translator can find it."""
+    if "strings" not in doc:
+        raise _md.MissingFieldError("", "strings")
+    by_offset = {}
+    for i, s in enumerate(doc["strings"]):
+        if not isinstance(s, dict) or "offset" not in s:
+            raise _md.MissingFieldError(f".strings[{i}]", "offset")
+        if "value" not in s:
+            raise _md.MissingFieldError(f".strings[{i}]", "value")
+        by_offset[s["offset"]] = s["value"]
     items = find_all_strings(data)
     if not items:
         return data
@@ -806,12 +819,23 @@ def _story_dict_from_json(payload: dict) -> dict:
 
     The JSON wraps `Scenes` as a list of `{key, scene}` for human readability;
     Writer wants `[(key, scene_dict), ...]`. Strip the metadata header here
-    so anything outside the schema is ignored.
+    so anything outside the schema is ignored — extra keys are fine, missing
+    ones raise `MissingFieldError` with a breadcrumb path.
     """
+    for f in ("_mc", "story_id", "Scenes"):
+        if f not in payload:
+            raise _md.MissingFieldError("", f)
+    scenes = []
+    for i, s in enumerate(payload["Scenes"]):
+        if not isinstance(s, dict) or "key" not in s:
+            raise _md.MissingFieldError(f".Scenes[{i}]", "key")
+        if "scene" not in s:
+            raise _md.MissingFieldError(f".Scenes[{i}]", "scene")
+        scenes.append((s["key"], s["scene"]))
     return {
         "_mc": payload["_mc"],
         "Id": payload["story_id"],
-        "Scenes": [(s["key"], s["scene"]) for s in payload["Scenes"]],
+        "Scenes": scenes,
     }
 
 
@@ -863,6 +887,10 @@ def cmd_repack_story(force: bool = False):
             # Only on success — a failed pack must stay "modified".
             fps[key] = sha256_file(fpath)
             repacked += 1
+        except _md.MissingFieldError as e:
+            tqdm.write(f"  ERROR {fname}: JSON missing required field "
+                       f"{e.field!r} at {e.path or '<root>'} — refusing to repack {bundle}")
+            failed += 1
         except Exception as e:
             tqdm.write(f"  ERROR {bundle}: {e}")
             failed += 1
@@ -917,6 +945,9 @@ def cmd_repack_misc(force: bool = False):
             full = FULL_SCHEMA_MASTER.get(bundle)
             if full and doc.get("schema") == "full":
                 _, _, serializer = full
+                for f in ("_mc", "Records"):
+                    if f not in doc:
+                        raise _md.MissingFieldError("", f)
                 obj = {"_mc": doc["_mc"], "Records": doc["Records"]}
                 new_pt = serializer(obj)
                 repack_bundle(src, dst, lambda _orig, _b=new_pt: _b)
@@ -927,6 +958,10 @@ def cmd_repack_misc(force: bool = False):
             fps[key] = sha256_file(fpath)
             repacked += 1
             tqdm.write(f"  {doc.get('asset', bundle)} -> {dst}")
+        except _md.MissingFieldError as e:
+            tqdm.write(f"  ERROR {fname}: JSON missing required field "
+                       f"{e.field!r} at {e.path or '<root>'} — refusing to repack {bundle}")
+            failed += 1
         except Exception as e:
             tqdm.write(f"  ERROR {bundle}: {e}")
             failed += 1

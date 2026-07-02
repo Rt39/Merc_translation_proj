@@ -660,13 +660,47 @@ class Reader:
 #                              Writer
 # ============================================================================
 
+class MissingFieldError(Exception):
+    """Raised by Writer when a required MemoryPack field is absent from the
+    input dict at serialize time.
+
+    `path` is a JSON-Pointer-ish breadcrumb (e.g. `.Records[42].Title`,
+    `.Scenes[3].scene.Text`) so callers can point translators at the exact
+    record they broke. `field` is the missing key. Extra keys in the JSON are
+    NOT reported — Writer only reads what its schema names, so the check is
+    one-sided by design (translators may add annotations freely).
+    """
+    def __init__(self, path: str, field: str):
+        self.path = path
+        self.field = field
+        super().__init__(f"missing required field {field!r} at {path or '<root>'}")
+
+
 class Writer:
     """Symmetric to Reader. Fed a dict produced by Reader.story(), emits the
     exact same bytes. Tested by reading every cached story bundle and asserting
-    that `serialize_story(read_story_bundle(...)) == decrypted_plaintext`."""
+    that `serialize_story(read_story_bundle(...)) == decrypted_plaintext`.
+
+    Tracks a `_path` breadcrumb as it descends into records/scenes so that a
+    missing key surfaces as `MissingFieldError(path, field)` with the exact
+    location, not a bare `KeyError('Text')` that gives the translator no way
+    to find the offending record.
+    """
     def __init__(self):
         self.buf = bytearray()
+        self._path = []
     def bytes_(self): return bytes(self.buf)
+
+    def _path_str(self):
+        return "".join(self._path)
+
+    def _require(self, obj, name):
+        """Return `obj[name]`, or raise MissingFieldError with the current
+        breadcrumb path. Used by every schema-driven field access so callers
+        get a structured error instead of a bare KeyError."""
+        if not isinstance(obj, dict) or name not in obj:
+            raise MissingFieldError(self._path_str(), name)
+        return obj[name]
 
     def byte(self, v): self.buf.append(v)
     def bool(self, v): self.byte(1 if v else 0)
@@ -715,14 +749,22 @@ class Writer:
 
     def write_obj(self, obj, fields):
         """Write `mc` field followed by min(mc, len(fields)) entries.
-        Mirror of Reader.obj() — used for every nested struct."""
+        Mirror of Reader.obj() — used for every nested struct.
+
+        Missing keys turn into `MissingFieldError` with the current path so
+        the translator can be told exactly which record/field was dropped."""
         if obj is None: self.byte(0xFF); return
-        mc = obj["_mc"]
+        mc = self._require(obj, "_mc")
         self.byte(mc)
         n = min(mc, len(fields))
         for i in range(n):
             name, fn = fields[i]
-            fn(obj[name])
+            v = self._require(obj, name)
+            self._path.append(f".{name}")
+            try:
+                fn(v)
+            finally:
+                self._path.pop()
 
     def asset_param(self, o):
         self.write_obj(o, [
@@ -864,12 +906,18 @@ class Writer:
 
     def story(self, o):
         if o is None: self.byte(0xFF); return
-        self.byte(o["_mc"])
-        self.i32(o["Id"])
-        self.i32(len(o["Scenes"]))
-        for key, sc in o["Scenes"]:
-            self.i32(key)
-            self.scene(sc)
+        self.byte(self._require(o, "_mc"))
+        self.i32(self._require(o, "Id"))
+        scenes = self._require(o, "Scenes")
+        self.i32(len(scenes))
+        for i, item in enumerate(scenes):
+            self._path.append(f".Scenes[{i}]")
+            try:
+                key, sc = item
+                self.i32(key)
+                self.scene(sc)
+            finally:
+                self._path.pop()
 
     # === Master-data records (Chapter/Story/Unit) ===
     # Field order = MemoryPackConstructor parameter order (NOT field declaration
@@ -957,26 +1005,9 @@ class Writer:
         self.i32(len(arr))
         for v in arr: self.i32(v)
 
-    def chapter_master(self, o):
-        self.byte(o["_mc"])
-        recs = o["Records"]
-        if recs is None: self.i32(-1); return
-        self.i32(len(recs))
-        for r in recs: self.chapter_record(r)
-
-    def story_master(self, o):
-        self.byte(o["_mc"])
-        recs = o["Records"]
-        if recs is None: self.i32(-1); return
-        self.i32(len(recs))
-        for r in recs: self.story_record(r)
-
-    def unit_master(self, o):
-        self.byte(o["_mc"])
-        recs = o["Records"]
-        if recs is None: self.i32(-1); return
-        self.i32(len(recs))
-        for r in recs: self.unit_record(r)
+    def chapter_master(self, o): self._write_master(o, self.chapter_record)
+    def story_master(self, o):   self._write_master(o, self.story_record)
+    def unit_master(self, o):    self._write_master(o, self.unit_record)
 
     # === 12 misc master records ===
 
@@ -1210,11 +1241,16 @@ class Writer:
         ])
 
     def _write_master(self, o, record_fn):
-        self.byte(o["_mc"])
-        recs = o["Records"]
+        self.byte(self._require(o, "_mc"))
+        recs = self._require(o, "Records")
         if recs is None: self.i32(-1); return
         self.i32(len(recs))
-        for r in recs: record_fn(r)
+        for i, r in enumerate(recs):
+            self._path.append(f".Records[{i}]")
+            try:
+                record_fn(r)
+            finally:
+                self._path.pop()
 
     def background_master(self, o):       self._write_master(o, self.background_record)
     def background_music_master(self, o): self._write_master(o, self.background_music_record)
